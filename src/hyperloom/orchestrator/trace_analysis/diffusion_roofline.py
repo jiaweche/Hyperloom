@@ -25,6 +25,9 @@ COL_BOUND = "Roofline Bound"
 COL_CATEGORY = "op category"
 COL_NAME = "name"
 
+# Kernels listed in the report's ``top_kernels`` summary block.
+_TOP_KERNELS = 10
+
 
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:
     """Read a CSV into a list of dict rows (empty list when missing)."""
@@ -76,11 +79,11 @@ def parse_gpu_timeline(rows: list[dict[str, str]]) -> dict[str, float]:
     return out
 
 
-def top_kernels(rows: list[dict[str, str]], k: int) -> list[dict[str, Any]]:
-    """Return the top-k kernels by actual kernel time for the summary block."""
+def top_kernels(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Return the top kernels by actual kernel time for the summary block."""
     ranked = sorted(rows, key=lambda r: safe_float(r.get(COL_KERNEL_TIME_SUM)), reverse=True)
     out: list[dict[str, Any]] = []
-    for r in ranked[:k]:
+    for r in ranked[:_TOP_KERNELS]:
         out.append(
             {
                 "name": (r.get(COL_NAME) or "")[:48],
@@ -92,11 +95,7 @@ def top_kernels(rows: list[dict[str, str]], k: int) -> list[dict[str, Any]]:
     return out
 
 
-def build_report(
-    csv_dir: Path,
-    num_denoise_steps: int | None,
-    top_k: int,
-) -> dict[str, Any]:
+def build_report(csv_dir: Path, num_denoise_steps: int | None) -> dict[str, Any]:
     """Assemble the workload-level roofline report from a TraceLens CSV dir."""
     unified_path = csv_dir / UNIFIED_CSV
     unified_rows = _read_csv_rows(unified_path)
@@ -109,7 +108,7 @@ def build_report(
         totals,
         timeline,
         num_denoise_steps,
-        top_kernels(unified_rows, top_k),
+        top_kernels(unified_rows),
         source="tracelens_csv",
     )
     report["source_csv_dir"] = str(csv_dir)
@@ -149,43 +148,8 @@ def assemble_report(
     return report
 
 
-def aggregate_bypass_candidates(hot_kernels: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate the bypass analytical candidate set into workload totals."""
-    sigma_actual = 0.0
-    sigma_ideal = 0.0
-    compute_us = 0.0
-    memory_us = 0.0
-    no_model_us = 0.0
-    for c in hot_kernels:
-        actual = safe_float(c.get("duration_us"))
-        sigma_actual += actual
-        src = str(c.get("roofline_source") or "")
-        # Binding-side attainment (cross-route comparable).
-        attain = safe_float(c.get("roofline_attainment_pct"))
-        if src not in ("", "placeholder") and attain > 0:
-            sigma_ideal += actual * (attain / 100.0)
-            bound = str(c.get("bound_type") or "").upper()
-            if "COMPUTE" in bound:
-                compute_us += actual
-            elif "MEMORY" in bound:
-                memory_us += actual
-            else:
-                no_model_us += actual
-        else:
-            no_model_us += actual
-    kernel_eff = (sigma_ideal / sigma_actual) if sigma_actual > 0 else 0.0
-    return {
-        "sigma_actual_kernel_us": sigma_actual,
-        "sigma_ideal_roofline_us": sigma_ideal,
-        "kernel_roofline_efficiency": kernel_eff,
-        "compute_bound_us": compute_us,
-        "memory_bound_us": memory_us,
-        "no_perf_model_us": no_model_us,
-    }
-
-
-def _top_bypass_kernels(hot_kernels: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
-    """Top-k bypass candidates by GPU time for the summary block."""
+def _top_bypass_kernels(hot_kernels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Top bypass candidates by GPU time for the summary block."""
     ranked = sorted(hot_kernels, key=lambda c: safe_float(c.get("duration_us")), reverse=True)
     return [
         {
@@ -194,7 +158,7 @@ def _top_bypass_kernels(hot_kernels: list[dict[str, Any]], k: int) -> list[dict[
             "bound": c.get("bound_type") or "",
             "kernel_time_us": safe_float(c.get("duration_us")),
         }
-        for c in ranked[:k]
+        for c in ranked[:_TOP_KERNELS]
     ]
 
 
@@ -210,13 +174,10 @@ def build_report_from_bypass(
     hot_kernels: list[dict[str, Any]],
     timeline: dict[str, Any],
     num_denoise_steps: int | None,
-    top_k: int,
     *,
-    workload: WorkloadTotals | None = None,
+    workload: WorkloadTotals,
 ) -> dict[str, Any]:
-    """Build the workload roofline report from the bypass candidate set."""
-    full_scope = workload is not None
-    totals = workload.totals if workload is not None else aggregate_bypass_candidates(hot_kernels)
+    """Build the workload roofline report from all-kernel workload totals and the bypass candidate set."""
     timeline_pct: dict[str, float] = {}
     if isinstance(timeline, dict):
         if timeline.get("busy_pct") is not None:
@@ -224,13 +185,12 @@ def build_report_from_bypass(
         if timeline.get("idle_pct") is not None:
             timeline_pct["idle_time"] = safe_float(timeline.get("idle_pct"))
     report = assemble_report(
-        totals,
+        workload.totals,
         timeline_pct,
         num_denoise_steps,
-        _top_bypass_kernels(hot_kernels, top_k),
+        _top_bypass_kernels(hot_kernels),
         source="bypass_analytical",
     )
-    # Scope + count reflect all kernels under full scope, else the top-k subset.
-    report["kernel_scope"] = "all_device_kernels" if full_scope else "analyzed_candidates"
-    report["kernels_aggregated"] = int(workload.kernel_count) if workload is not None else len(hot_kernels)
+    report["kernel_scope"] = "all_device_kernels"
+    report["kernels_aggregated"] = int(workload.kernel_count)
     return report

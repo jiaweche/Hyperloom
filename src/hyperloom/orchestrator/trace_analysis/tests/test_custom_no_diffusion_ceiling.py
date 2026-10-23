@@ -67,6 +67,8 @@ def _write_reports_for(tmp_path, framework):
         model_name="whatever-the-operator-shipped",
         framework=framework,
         target_platform="MI300X",
+        workspace_path=str(tmp_path),
+        roofline_output_name="kernel_roofline.json",
         dry_run=False,
     )
     return analysis_reports.write_reports(

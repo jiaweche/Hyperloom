@@ -20,7 +20,7 @@ from typing import Any, Iterator, Mapping
 
 # Stdlib-only sibling; keeps this reader independent of TraceLens while sharing one capture-vs-workload rule with the
 # TraceLens route.
-from ._capture_shapes import is_capture_fragment as _shared_is_capture_fragment
+from ._capture_shapes import is_capture_fragment
 from ._trace_rank import select_primary_trace, trace_rank as _rank_of
 
 # GPU device-side event categories (Kineto ``cat`` values).
@@ -91,14 +91,9 @@ def _trace_candidates(root: Path) -> list[Path]:
     return out
 
 
-def _is_capture_fragment(path: str | Path, root: str | Path | None = None) -> bool:
-    """True if ``path`` is a CUDA-graph capture shard, not a main trace."""
-    return _shared_is_capture_fragment(path, root)
-
-
 def _main_trace_candidates(candidates: list[Path], root: str | Path | None = None) -> list[Path]:
     """Drop CUDA-graph capture shards, keeping only main workload traces."""
-    main = [c for c in candidates if not _is_capture_fragment(c, root)]
+    main = [c for c in candidates if not is_capture_fragment(c, root)]
     return main or candidates
 
 
@@ -107,7 +102,6 @@ def _select_trace_file(
     root: str | Path | None = None,
     *,
     require_single_rank: bool = False,
-    preferred_rank: int = 0,
     tensor_parallel_size: int | None = None,
 ) -> Path | None:
     """Deterministically pick one trace file from candidates."""
@@ -116,7 +110,6 @@ def _select_trace_file(
         return select_primary_trace(
             candidates,
             file_size=_file_size,
-            preferred_rank=preferred_rank,
             tensor_parallel_size=tensor_parallel_size,
         )
     merged = [c for c in candidates if c.name.startswith("merged-")]
@@ -132,7 +125,6 @@ def resolve_trace_file(
     trace_input: str | Path,
     *,
     require_single_rank: bool = False,
-    preferred_rank: int = 0,
     tensor_parallel_size: int | None = None,
 ) -> Path | None:
     """Resolve a trace input (file or directory) to a single trace file."""
@@ -142,7 +134,6 @@ def resolve_trace_file(
             return select_primary_trace(
                 [p],
                 file_size=_file_size,
-                preferred_rank=preferred_rank,
                 tensor_parallel_size=tensor_parallel_size,
             )
         return p
@@ -155,7 +146,6 @@ def resolve_trace_file(
         candidates,
         p,
         require_single_rank=require_single_rank,
-        preferred_rank=preferred_rank,
         tensor_parallel_size=tensor_parallel_size,
     )
 
@@ -870,8 +860,7 @@ def analyze_trace(trace_input: str | Path, options: TraceAnalysisOptions = Trace
         "aggregation_scope": "full_trace" if window is None else "steady_state",
         "analyzed_rank": _rank_of(tf),
         "rank_count": _trace_rank_count(trace_input),
-        "selected_capture_fragment": _is_capture_fragment(tf, _input_root),
-        "annotation_windows": buffers.annotation_windows,
+        "selected_capture_fragment": is_capture_fragment(tf, _input_root),
         **body,
     }
     if steady_window is not None:

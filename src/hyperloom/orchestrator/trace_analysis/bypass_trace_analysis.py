@@ -42,6 +42,7 @@ from ._idle_gate import (
 )
 from ._denoise_steps import count_profiler_steps, resolve_perstep_divisor
 from ._io_utils import write_text
+from ._run_status import new_run_meta, note_step
 
 log = logging.getLogger(__name__)
 
@@ -352,9 +353,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--analysis-mode", default="")
     p.add_argument("--require-single-rank", action="store_true")
     p.add_argument("--tensor-parallel-size", type=int, default=0)
-    p.add_argument("--split-conc", default="")
-    p.add_argument("--split-osl", default="")
-    p.add_argument("--split-r", default="")
     p.add_argument("--capture-folder", default="")
     p.add_argument(
         "--steady-state-mode",
@@ -405,35 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     trace_health_warnings: list[dict[str, Any]] = []
     top_k = _TOP_K
 
-    # Mirrors the ``run_meta`` block tracelens_analysis.py returns so the caller's SBD V6 roofline event carries one
-    # shape for both tools.
-    run_meta: dict[str, Any] = {
-        "preflight": {},
-        "split": {},
-        "selection": {},
-        "steps": [],
-        "route_ext": {},
-    }
-
-    def _note_step(
-        step_id: str,
-        *,
-        category: str,
-        status: str,
-        skip_reason: str | None = None,
-        **detail: Any,
-    ) -> None:
-        """Append one step to the run's ladder."""
-        run_meta["steps"].append(
-            {
-                "step_id": step_id,
-                "order": len(run_meta["steps"]) + 1,
-                "category": category,
-                "status": status,
-                "skip_reason": skip_reason,
-                "detail": detail,
-            }
-        )
+    run_meta = new_run_meta()
 
     framework_l = (args.framework or "").lower()
     # Steady-state windowing: opt-in via --steady-state-mode / env, always on for xDiT.
@@ -469,7 +439,8 @@ def main(argv: list[str] | None = None) -> int:
             "steady_state_mode": str(args.steady_state_mode or ""),
         }
     )
-    _note_step(
+    note_step(
+        run_meta,
         "discover_inputs",
         category="preflight",
         status="ok",
@@ -483,8 +454,9 @@ def main(argv: list[str] | None = None) -> int:
         ("split_trace", "the reader windows the trace in memory and writes no split chunks"),
         ("select_chunk", "no split chunks exist to select from"),
     ):
-        _note_step(_skipped_step, category="split", status="skipped", skip_reason=_skip_reason)
-    _note_step(
+        note_step(run_meta, _skipped_step, category="split", status="skipped", skip_reason=_skip_reason)
+    note_step(
+        run_meta,
         "run_analysis",
         category="analyze",
         status="ok" if analyze.get("status") == "ok" else "failed",
@@ -685,10 +657,6 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-    # Stamp the report path onto each candidate (downstream reads it).
-    for cand in candidates.get("hot_kernels", []):
-        cand["trace_report_path"] = str(analysis_md_path)
-
     throughput_unit = framework_registry.throughput_unit(args.framework)
     write_text(
         analysis_md_path,
@@ -749,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
     atomic_write_json(kernel_roofline_path, kernel_roofline, fmt=JsonFormat(sort_keys=False, ensure_ascii=False))
     atomic_write_json(summary_path, summary, fmt=JsonFormat(sort_keys=False, ensure_ascii=False))
 
-    # Kernel-fusion opportunities: launch adjacency -> fusable clusters.
+    # Kernel-fusion opportunities: launch adjacency -> fusable cluster totals.
     fusion = _report.build_fusion(analyze)
 
     # Diffusion / scriptable workload-level roofline: aggregate the per-kernel analytical roofline into an end-to-end
@@ -770,7 +738,6 @@ def main(argv: list[str] | None = None) -> int:
                 candidates.get("hot_kernels", []),
                 analyze.get("timeline") or {},
                 _diff_steps,
-                top_k,
                 workload=WorkloadTotals(_workload_totals, kernel_count=len(_all_kernels)),
             )
             _diff_path = run_dir / "diffusion_roofline.json"
@@ -807,11 +774,6 @@ def main(argv: list[str] | None = None) -> int:
         "tracelens_summary_path": str(summary_path),
         "kernel_metrics_csv_path": str(kernel_metrics_csv_path),
         "kernel_summary_csv_path": str(kernel_summary_csv_path),
-        "fusion": {
-            "launch_count": fusion.get("launch_count", 0),
-            "fusable_cluster_count": fusion.get("fusable_cluster_count", 0),
-            "fusable_time_us": fusion.get("fusable_time_us", 0.0),
-        },
         "orchestrator_mode": "bypass",
         "timeline": analyze.get("timeline") or {},
         "attribution": analyze.get("attribution") or {},
@@ -846,11 +808,7 @@ def main(argv: list[str] | None = None) -> int:
         "graph_coverage": analyze.get("graph_coverage") or {},
         "timeline": analyze.get("timeline") or {},
         "attribution": analyze.get("attribution") or {},
-        "fusion": {
-            "launch_count": fusion.get("launch_count", 0),
-            "fusable_cluster_count": fusion.get("fusable_cluster_count", 0),
-            "fusable_time_us": fusion.get("fusable_time_us", 0.0),
-        },
+        "fusion": fusion,
         # Counts rather than the lists: the lists are already in the candidates artifact, and it is the partition that
         # says whether dispatch has anything to work with.
         "routable_kernel_count": len(candidates.get("routable_kernels", []) or []),
@@ -859,14 +817,15 @@ def main(argv: list[str] | None = None) -> int:
         "trace_shape_manifest_status": str(shape_manifest.get("status") or ""),
         "diffusion_roofline_path": str(diffusion_roofline_path or ""),
     }
-    _note_step(
+    note_step(
+        run_meta,
         "extract_hot_kernels",
         category="emit",
         status="ok",
         hot_kernel_count=len(hot_kernels),
         routable_kernel_count=run_meta["route_ext"]["routable_kernel_count"],
     )
-    _note_step("write_reports", category="emit", status="ok", report_path=str(analysis_md_path))
+    note_step(run_meta, "write_reports", category="emit", status="ok", report_path=str(analysis_md_path))
     result["run_meta"] = run_meta
     # Surfaced only when the opt-in manifest was produced (P0-A / WP-1).
     result["trace_shape_manifest"] = shape_manifest

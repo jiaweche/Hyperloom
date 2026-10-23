@@ -33,7 +33,7 @@ def _write_csvs(csv_dir: Path, *, with_timeline: bool = True) -> None:
 
 def test_diffusion_roofline_aggregation(tmp_path):
     _write_csvs(tmp_path)
-    report = dr.build_report(tmp_path, num_denoise_steps=25, top_k=3)
+    report = dr.build_report(tmp_path, num_denoise_steps=25)
     t = report["totals"]
     assert t["sigma_actual_kernel_us"] == pytest.approx(2500.0)
     assert t["sigma_ideal_roofline_us"] == pytest.approx(700.0)  # 500 + 200 + 0
@@ -48,7 +48,7 @@ def test_diffusion_roofline_aggregation(tmp_path):
 
 def test_diffusion_roofline_missing_timeline_is_fail_soft(tmp_path):
     _write_csvs(tmp_path, with_timeline=False)
-    report = dr.build_report(tmp_path, num_denoise_steps=None, top_k=5)
+    report = dr.build_report(tmp_path, num_denoise_steps=None)
     assert report["gpu_busy_ratio"] is None
     assert report["end_to_end_efficiency_estimate"] is None
     assert "per_step" not in report
@@ -56,7 +56,7 @@ def test_diffusion_roofline_missing_timeline_is_fail_soft(tmp_path):
 
 def test_diffusion_roofline_missing_unified_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        dr.build_report(tmp_path, num_denoise_steps=None, top_k=5)
+        dr.build_report(tmp_path, num_denoise_steps=None)
 
 
 def test_safe_float_non_numeric_is_zero():

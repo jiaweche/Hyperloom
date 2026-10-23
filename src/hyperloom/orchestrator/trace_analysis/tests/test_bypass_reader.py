@@ -194,10 +194,7 @@ def test_timeline_union_math(tmp_path):
 def test_annotation_windows(tmp_path):
     tf = _write_trace(tmp_path / "t.trace.json")
     out = reader.analyze_trace(tf, reader.TraceAnalysisOptions(top_k=0))
-    windows = out["annotation_windows"]
-    assert len(windows) == 1
-    assert windows[0]["name"] == "ProfilerStep#1"
-    assert windows[0]["dur"] == 700.0
+    assert out["attribution"]["annotation_window_count"] == 1
 
 
 def test_gzip_trace_is_transparent(tmp_path):
@@ -976,4 +973,4 @@ def test_analyze_trace_caps_annotation_buffers(tmp_path, monkeypatch):
     assert out["status"] == "ok"
     assert out["truncated"] is True
     assert out["truncation_reason"] == "annotation_windows"
-    assert len(out["annotation_windows"]) == 2
+    assert out["attribution"]["annotation_window_count"] == 2

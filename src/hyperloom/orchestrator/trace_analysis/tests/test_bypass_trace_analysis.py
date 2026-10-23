@@ -184,43 +184,26 @@ def test_high_idle_gate_respects_threshold_env(tmp_path, capsys, monkeypatch):
 # ── diffusion workload roofline ──────────────────────────────────────────────
 
 
-def test_bypass_diffusion_aggregation_numerics():
-    # sigma_ideal = sum(actual * eff); placeholder kernels count only toward no_perf_model_us.
+def test_bypass_diffusion_report_numerics():
+    # The workload totals drive the ratios and per-step split; the candidate set only feeds top_kernels.
     hot = [
-        {
-            "duration_us": 100.0,
-            "roofline_attainment_pct": 50.0,
-            "bound_type": "compute_bound",
-            "roofline_source": "analytical",
-            "name": "gemm_k",
-            "kernel_category": "GEMM",
-        },
-        {
-            "duration_us": 60.0,
-            "roofline_attainment_pct": 25.0,
-            "bound_type": "memory_bound",
-            "roofline_source": "analytical",
-            "name": "attn_k",
-            "kernel_category": "SDPA",
-        },
-        {
-            "duration_us": 40.0,
-            "roofline_attainment_pct": 0.0,
-            "roofline_source": "placeholder",
-            "name": "p_k",
-            "kernel_category": "Other",
-        },
+        {"duration_us": 100.0, "bound_type": "compute_bound", "name": "gemm_k", "kernel_category": "GEMM"},
+        {"duration_us": 60.0, "bound_type": "memory_bound", "name": "attn_k", "kernel_category": "SDPA"},
     ]
-    r = dr.build_report_from_bypass(hot, {"busy_pct": 80.0, "idle_pct": 20.0}, 4, 10)
-    t = r["totals"]
-    assert t["sigma_actual_kernel_us"] == 200.0
-    assert t["sigma_ideal_roofline_us"] == 65.0
-    assert round(t["kernel_roofline_efficiency"], 4) == 0.325
-    assert t["compute_bound_us"] == 100.0 and t["memory_bound_us"] == 60.0
-    assert t["no_perf_model_us"] == 40.0
+    totals = {
+        "sigma_actual_kernel_us": 200.0,
+        "sigma_ideal_roofline_us": 65.0,
+        "kernel_roofline_efficiency": 0.325,
+        "compute_bound_us": 100.0,
+        "memory_bound_us": 60.0,
+        "no_perf_model_us": 40.0,
+    }
+    r = dr.build_report_from_bypass(
+        hot, {"busy_pct": 80.0, "idle_pct": 20.0}, 4, workload=dr.WorkloadTotals(totals, kernel_count=3)
+    )
     assert r["gpu_busy_ratio"] == 0.8
     assert round(r["end_to_end_efficiency_estimate"], 4) == 0.26
-    assert r["source"] == "bypass_analytical" and r["kernel_scope"] == "analyzed_candidates"
+    assert r["source"] == "bypass_analytical"
     assert r["num_denoise_steps"] == 4
     assert r["per_step"]["actual_kernel_us"] == 50.0 and r["per_step"]["ideal_roofline_us"] == 16.25
     assert r["top_kernels"][0]["name"] == "gemm_k"
@@ -237,7 +220,7 @@ def test_diffusion_report_totals_param_marks_full_scope():
         "no_perf_model_us": 0.0,
     }
     # kernels_aggregated reflects the all-kernel count, not len(hot_kernels).
-    r = dr.build_report_from_bypass([], {"busy_pct": 90.0}, 8, 10, workload=dr.WorkloadTotals(totals, kernel_count=137))
+    r = dr.build_report_from_bypass([], {"busy_pct": 90.0}, 8, workload=dr.WorkloadTotals(totals, kernel_count=137))
     assert r["kernel_scope"] == "all_device_kernels"
     assert r["kernels_aggregated"] == 137
     assert r["totals"]["sigma_actual_kernel_us"] == 100.0
@@ -246,7 +229,15 @@ def test_diffusion_report_totals_param_marks_full_scope():
 
 def test_bypass_diffusion_report_shape_without_steps():
     # No denoise steps -> no per_step block, but the core report keys stay put.
-    r = dr.build_report_from_bypass([], {"busy_pct": 0.0}, None, 10)
+    totals = {
+        "sigma_actual_kernel_us": 0.0,
+        "sigma_ideal_roofline_us": 0.0,
+        "kernel_roofline_efficiency": 0.0,
+        "compute_bound_us": 0.0,
+        "memory_bound_us": 0.0,
+        "no_perf_model_us": 0.0,
+    }
+    r = dr.build_report_from_bypass([], {"busy_pct": 0.0}, None, workload=dr.WorkloadTotals(totals, kernel_count=0))
     for key in (
         "source",
         "totals",
@@ -656,9 +647,9 @@ def test_fusion_result_summary(tmp_path, capsys, monkeypatch):
     trace = tmp_path / "f.trace.json"
     trace.write_bytes(json.dumps({"traceEvents": _FUSION_EVENTS}).encode("utf-8"))
     _, result, _ = _run(_base_argv(tmp_path, str(trace)), capsys)
-    assert result["fusion"]["launch_count"] == 2
-    assert result["fusion"]["fusable_cluster_count"] == 1
-    assert result["fusion"]["fusable_time_us"] > 0.0
+    fusion = result["run_meta"]["route_ext"]["fusion"]
+    assert fusion == {"launch_count": 2, "fusable_cluster_count": 1, "fusable_time_us": 20.0}
+    assert "fusion" not in result
     assert "kernel_sequence" not in result["artifact_paths"]
 
 

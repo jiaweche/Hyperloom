@@ -464,8 +464,8 @@ def test_build_kernel_roofline_shape():
         assert tracelens_row_keys.issubset(r.keys())
         # bypass superset also exposes the binding-side roofline attainment.
         assert "roofline_attainment_pct" in r
-        # bottleneck falls back to bound_type; recommended_actions is always a list.
-        assert r["bottleneck"] == (r.get("bottleneck") or r["bound_type"])
+        # bottleneck mirrors bound_type; recommended_actions is always a list.
+        assert r["bottleneck"] == r["bound_type"]
         assert isinstance(r["recommended_actions"], list)
         assert "roofline_name" in r  # present even when null (no analytical analogue)
 
@@ -837,7 +837,6 @@ def _cand(kernel_id, name, source_file, *, reusable=True, dur=100.0, gpu_pct=10.
         "source_file": source_file,
         "reusable_native_kernel": reusable,
         "duration_us": dur,
-        "percent_of_total": gpu_pct,
         "gpu_pct": gpu_pct,
         "call_count": count,
         "bound_type": "\u2014",
@@ -1084,7 +1083,6 @@ def test_non_patchable_with_source_is_not_routable(monkeypatch):
     assert cand["source_file"] == "/repo/dispatcher.cu"
     assert cand["source_resolution_method"] == "gate_non_patchable"
     assert cand["op_to_source_patchable"] is False
-    assert cand["op_to_source_status"] == "non_rewritable"
     # Reusable-by-name + resolved source + dispatch-grade shape, yet the patchable gate keeps it out of routable.
     assert cand["reusable_native_kernel"] is True
     assert cand["shape_dispatchable"] is True

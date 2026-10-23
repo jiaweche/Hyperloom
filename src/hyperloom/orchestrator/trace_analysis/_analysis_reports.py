@@ -20,7 +20,6 @@ from ._kernel_roofline import (
     _candidate_model_config_paths,
     build_kernel_roofline_payload,
     enrich_candidates_with_runtime_metadata,
-    kernel_roofline_path_for_run,
 )
 from ._trace_inputs import TraceInputs
 from .tracelens_skill_runner import aggregate_by_source_function, tracelens_analysis_mode
@@ -260,10 +259,7 @@ def write_reports(
             )
             existing_report_path = stub_md
 
-    kernel_roofline_path = kernel_roofline_path_for_run(
-        run_dir,
-        filename=getattr(args, "roofline_output_name", "kernel_roofline.json") or "kernel_roofline.json",
-    )
+    kernel_roofline_path = Path(args.workspace_path) / "reports" / (args.roofline_output_name or "kernel_roofline.json")
     kernel_roofline_payload = build_kernel_roofline_payload(
         trace_input=str(Path(args.trace_input).resolve()),
         trace_input_type=trace_inputs.input_type,
@@ -288,11 +284,7 @@ def write_reports(
                 requested_steps=int(getattr(args, "num_denoise_steps", 0) or 0),
                 inferred_steps=count_profiler_steps(getattr(args, "trace_input", "") or ""),
             )
-            _diff_report = _build_diffusion_roofline(
-                tracelens_dir / "perf_report_csvs",
-                _num_steps,
-                int(getattr(args, "top_k", 10) or 10),
-            )
+            _diff_report = _build_diffusion_roofline(tracelens_dir / "perf_report_csvs", _num_steps)
             # A-priori analytic compute ceiling (config/safetensors derived),
             # giving the workload roofline an absolute ideal-ms floor. Best-effort,
             # and only for frameworks whose denoiser config Hyperloom can read --

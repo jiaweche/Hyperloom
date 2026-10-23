@@ -31,10 +31,12 @@ from ._idle_gate import resolve_idle_pct_threshold
 from ._roofline_source import PLACEHOLDER as _RL_PLACEHOLDER
 from ._task_group_contract import (
     build_operator_identity,
-    build_task_group_shape_cases,
+    finalize_task_groups,
+    is_native_source,
     legacy_operator_identity_keys,
     operator_identity_key,
 )
+from ._trace_shapes import format_operand_shape
 from hyperloom.common.kernel_shape_contract import (
     DISPATCHABLE_SHAPE_PROVENANCE as _DISPATCHABLE_SHAPE_PROVENANCE,
 )
@@ -70,52 +72,12 @@ def _build_suggestion(category: str, bound_type: str) -> str:
     return f"{prefix}: {action}" if prefix else action
 
 
-# torch ``Input type`` token -> compact dtype suffix for the shape-string contract (e.g. ``(15360,2048) bf16``);
-# unmapped/empty types emit a bare shape.
-_DTYPE_SUFFIX: dict[str, str] = {
-    # Suffixes MUST match the shared harness dtype_map + roofline peak table; a compact "f16"/"f32" makes the harness
-    # emit an invalid ``torch.f16``.
-    "c10::bfloat16": "bf16",
-    "bfloat16": "bf16",
-    "c10::half": "fp16",
-    "half": "fp16",
-    "float16": "fp16",
-    "float": "fp32",
-    "float32": "fp32",
-    "double": "fp64",
-    "float64": "fp64",
-    "int": "i32",
-    "int32": "i32",
-    "long": "i64",
-    "int64": "i64",
-    "short": "i16",
-    "int16": "i16",
-    "char": "i8",
-    "int8": "i8",
-    "uint8": "u8",
-    "bool": "bool",
-}
-
-
-def _format_operand_shape(dims: Any, dtype: Any) -> str | None:
-    """Render one operand as a ``(d0,d1,...) <dtype>`` string (or ``None``)."""
-    if not isinstance(dims, (list, tuple)) or not dims:
-        return None
-    try:
-        body = ",".join(str(int(d)) for d in dims)
-    except (TypeError, ValueError):
-        return None
-    shape = f"({body},)" if len(dims) == 1 else f"({body})"
-    suffix = _DTYPE_SUFFIX.get(str(dtype or "").strip().lower())
-    return f"{shape} {suffix}" if suffix else shape
-
-
 def _trace_shape_entries(op_shapes: Any, op_dtypes: Any, call_count: int) -> list[dict[str, Any]]:
     """Build the downstream ``input_shapes`` contract from Kineto Input Dims/type."""
     dtypes = op_dtypes if isinstance(op_dtypes, (list, tuple)) else []
     operands: list[str] = []
     for i, dims in enumerate(op_shapes if isinstance(op_shapes, (list, tuple)) else []):
-        rendered = _format_operand_shape(dims, dtypes[i] if i < len(dtypes) else "")
+        rendered = format_operand_shape(dims, dtypes[i] if i < len(dtypes) else "")
         if rendered:
             operands.append(rendered)
     if not operands:
@@ -204,21 +166,6 @@ def _source_type_for_op(op_name: str) -> str:
     return "unknown"
 
 
-# Native device-code extensions.
-_NATIVE_SOURCE_EXTS = (
-    ".cu",
-    ".cuh",
-    ".hip",
-    ".cpp",
-    ".cc",
-    ".cxx",
-    ".hpp",
-    ".hh",
-    ".h",
-    ".c",
-)
-
-
 def _build_task_groups(hot_kernels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group routable candidates that share an editable source into task groups."""
     buckets: dict[str, dict[str, Any]] = {}
@@ -228,7 +175,7 @@ def _build_task_groups(hot_kernels: list[dict[str, Any]]) -> list[dict[str, Any]
             continue
         operation = c["name"]
         identity_args = {
-            "source_kind": "native" if src.lower().endswith(_NATIVE_SOURCE_EXTS) else "py",
+            "source_kind": "native" if is_native_source(src) else "py",
             "source_path": src,
             "operation": operation,
         }
@@ -250,7 +197,6 @@ def _build_task_groups(hot_kernels: list[dict[str, Any]]) -> list[dict[str, Any]
             "raw_arg_spec": {},
             "call_count": c["call_count"],
             "duration_us": c["duration_us"],
-            "percent_of_total": c.get("percent_of_total", 0.0),
             "gpu_pct": c["gpu_pct"],
             "bound_type": c.get("bound_type", ""),
         }
@@ -281,21 +227,13 @@ def _build_task_groups(hot_kernels: list[dict[str, Any]]) -> list[dict[str, Any]
         bucket["aggregate_call_count"] += row["call_count"]
         bucket["aggregate_gpu_pct"] += row["gpu_pct"]
 
-    ordered = sorted(buckets.values(), key=lambda g: g["aggregate_duration_us"], reverse=True)
-    for idx, group in enumerate(ordered, start=1):
-        group["task_group_id"] = f"tg{idx:03d}"
-        group["rows"].sort(key=lambda r: r["duration_us"], reverse=True)
-        group["primary_kernel_id"] = group["rows"][0]["kernel_id"]
-        group["aggregate_duration_us"] = round(group["aggregate_duration_us"], 3)
-        group["aggregate_gpu_pct"] = round(group["aggregate_gpu_pct"], 3)
-        group["shape_cases"] = build_task_group_shape_cases(group)
-    return ordered
+    return finalize_task_groups(buckets.values())
 
 
 def _source_type_from_path(path: str) -> str:
     """Derive source type from a resolved source file's extension."""
     low = (path or "").lower()
-    if low.endswith(_NATIVE_SOURCE_EXTS):
+    if is_native_source(low):
         return "hip_cpp"
     if low.endswith(".py"):
         return "python"
@@ -316,8 +254,6 @@ def _implementation_contract(
     if "triton" in traced_kind:
         return "triton", "triton"
     source_type = _source_type_from_path(source_file) or _source_type_for_op(op_name)
-    if source_type in {"triton", "flydsl", "ck"}:
-        return source_type, source_type
     return source_type, ""
 
 
@@ -360,7 +296,6 @@ def _candidate(idx: int, k: dict[str, Any], *, framework: str, target_platform: 
         "device_kernel_names": [kname[:120]],
         "duration_us": k.get("gpu_time_us", 0.0),
         "gpu_pct": k.get("gpu_pct", 0.0),
-        "percent_of_total": k.get("gpu_pct", 0.0),
         "call_count": k.get("count", 0),
         "bound_type": _UNKNOWN_BOUND,
         "efficiency_percent": 0.0,
@@ -385,7 +320,6 @@ def _candidate(idx: int, k: dict[str, Any], *, framework: str, target_platform: 
         "identity_route": "bypass",
         "op_to_source_patchable": resolution.patchable,
         "op_to_source_reason": resolution.reason,
-        "op_to_source_status": "resolved" if resolution.patchable else "non_rewritable",
         "recommended_backends": list(_REUSABLE_BACKENDS) if kc.reusable else [],
         "benchmark_files": [],
         "kernel_repo": "",
@@ -508,9 +442,6 @@ def build_summary(
         "skipped": skipped,
         "task_groups": group_entries,
         "task_count": len(tasks),
-        # ``tasks`` already excludes geometry-only kernels, so dispatchable_count == task_count; kept explicit so the
-        # audit view states dispatchability.
-        "dispatchable_count": len(tasks),
         "geometry_only_skipped_count": geometry_only_skipped_count,
         "skipped_count": len(skipped),
         "task_group_count": len(group_entries),
@@ -1040,8 +971,8 @@ def build_kernel_roofline(
                 "gpu_pct": c["gpu_pct"],
                 "call_count": c["call_count"],
                 "bound_type": c["bound_type"],
-                # bottleneck falls back to bound_type; roofline_name has no analytical analogue so it stays null.
-                "bottleneck": c.get("bottleneck") or c.get("bound_type"),
+                # roofline_name has no analytical analogue so it stays null.
+                "bottleneck": c["bound_type"],
                 "roofline_name": c.get("roofline_name"),
                 "suggestion": c.get("suggestion") or "",
                 "recommended_actions": list(c.get("recommended_actions") or []),
@@ -1067,7 +998,7 @@ def build_kernel_roofline(
 
 
 def build_fusion(analyze_out: dict[str, Any]) -> dict[str, Any]:
-    """Build the kernel-fusion opportunity payload from the launch sequence."""
+    """Build the kernel-fusion opportunity totals from the launch sequence."""
     launches = analyze_out.get("kernel_launches") or []
     # Memoize classification by (device name, op name): few distinct kernels but many launches, so caching keeps this
     # O(distinct) not O(launches x rules).
@@ -1083,15 +1014,9 @@ def build_fusion(analyze_out: dict[str, Any]) -> dict[str, Any]:
 
     categorized = [
         {
-            "name": lc.get("name", ""),
-            "op_name": lc.get("op_name", ""),
             "category": _category(lc.get("name", "") or "", lc.get("op_name", "") or ""),
-            "ts": lc.get("ts", 0.0),
             "dur": lc.get("dur", 0.0),
         }
         for lc in launches
     ]
-    payload = analyze_fusion(categorized)
-    payload["source"] = "bypass"
-    payload["aggregation_scope"] = analyze_out.get("aggregation_scope", "full_trace")
-    return payload
+    return analyze_fusion(categorized)
