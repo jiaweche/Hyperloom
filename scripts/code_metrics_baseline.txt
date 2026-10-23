@@ -497,7 +497,6 @@ function-lines src/hyperloom/orchestrator/trace_analysis/trace_selfcert.py::_cer
 function-lines src/hyperloom/orchestrator/trace_analysis/trace_selfcert.py::build_verdict 55
 function-lines src/hyperloom/orchestrator/trace_analysis/trace_selfcert.py::certify_trace_dir 67
 function-lines src/hyperloom/orchestrator/trace_analysis/tracelens_analysis.py::main 765
-function-lines src/hyperloom/orchestrator/trace_analysis/tracelens_arch_benchmark.py::populate_gpu_arch_json 59
 function-lines src/hyperloom/orchestrator/trace_analysis/tracelens_skill_runner.py::aggregate_by_source_function 59
 function-lines src/hyperloom/orchestrator/trace_analysis/tracelens_skill_runner.py::run_tracelens_skill 60
 function-lines src/hyperloom_kb/cli.py::add_commands 63
@@ -710,7 +709,7 @@ function-lines src/kernelforge/rewrite_by_flydsl/runner.py::_Rewrite.finish 61
 function-lines src/kernelforge/tools/aiter_cache.py::prune_aiter_cache_shards 68
 module-lines src/hyperloom/inference_optimizer/breakdown/recorder/kernel_event.py 1785
 module-lines src/hyperloom/inference_optimizer/breakdown/schema.py 2681
-module-lines src/hyperloom/inference_optimizer/cli/__init__.py 2727
+module-lines src/hyperloom/inference_optimizer/cli/__init__.py 2723
 module-lines src/hyperloom/inference_optimizer/cli/model_gate.py 1759
 module-lines src/hyperloom/inference_optimizer/cli/preflight.py 2523
 module-lines src/hyperloom/inference_optimizer/multi_node/cli.py 1802
