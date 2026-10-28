@@ -758,9 +758,9 @@ def test_a_recipe_argv_that_sets_the_watchdog_gets_none_appended(source, tmp_pat
     assert _watchdog(materialize_agentx(config, tmp_path / "none.yaml")) == ["1800"]
 
 
-def test_a_candidate_that_drops_the_recipe_watchdog_gets_the_default(source, tmp_path, report):
-    # Magpie keeps only its protected options under replace mode and drops whatever remove_args names, so in
-    # both of these the recipe's 3600 is gone by launch time and the guard has to supply the default itself.
+def test_a_later_round_supplies_no_watchdog_of_its_own(source, tmp_path, report):
+    # Once the launch has evidence the guard is done: a candidate that drops the recipe's flag runs at the
+    # framework default, because the JIT cache the guard exists for is warm by then.
     base = _recipe_that_sets_the_watchdog(source, tmp_path, report)
     replaced = _build_variant_yaml(
         GridRecipe(base_yaml_path=base, base=LaunchLayer()),
@@ -773,8 +773,29 @@ def test_a_candidate_that_drops_the_recipe_watchdog_gets_the_default(source, tmp
         output_subdir=tmp_path / "remove",
     )
 
-    assert _watchdog(replaced) == ["1800"]
-    assert _watchdog(removed) == ["1800"]
+    assert _watchdog(replaced) == []
+    assert _watchdog(removed) == []
+
+
+def test_the_baseline_default_is_not_carried_into_later_rounds(source, tmp_path, report):
+    from hyperloom.inference_optimizer.agentx.report import native_launch_evidence
+    from hyperloom.orchestrator.actions.executors._launch_evidence import persist_launch_evidence
+
+    base = materialize_benchmark_config(source, tmp_path / "base")
+    assert _watchdog(base) == ["1800"]
+
+    # The baseline's materialized YAML becomes the grid base, so its append_args reach every candidate. Once
+    # the evidence names the recipe's own watchdog, the injected value has to go or it governs the session.
+    receipt = report["agentx_metrics"]["server_launch"]
+    receipt["base_argv"] = [*receipt["effective_argv"], "--watchdog-timeout", "3600"]
+    persist_launch_evidence(native_launch_evidence(extract_benchmark_measurement(report), base), slot=base.parent)
+    candidate = _build_variant_yaml(
+        GridRecipe(base_yaml_path=base, base=LaunchLayer()),
+        GridVariant("c", "--chunked-prefill-size 2048", {}),
+        output_subdir=tmp_path / "c",
+    )
+
+    assert _watchdog(candidate) == []
 
 
 def test_a_vllm_launch_gets_no_sglang_watchdog(vllm_source, tmp_path):
