@@ -23,6 +23,7 @@ from hyperloom.orchestrator.kernel import kernel_decisions as kd
 from hyperloom.orchestrator.kernel import request_handlers as krh
 
 from .conftest import seed_integrate_verdict, seed_kernel_keep
+from hyperloom.inference_optimizer.session import paths as session_paths
 from hyperloom.orchestrator.actions.executors import trace_analyze as ta
 from hyperloom.orchestrator.actions.executors.baseline import (
     BaselineExecutor,
@@ -1107,13 +1108,19 @@ def test_tracelens_patch_status_separates_fine_from_never_tried(tmp_path, monkey
     assert _status(sglang=True, enable_patch="0") == "not_attempted"
 
 
+def _force_sitecustomize_shape_mode(monkeypatch):
+    from hyperloom.orchestrator.actions.executors import _server_patcher
+
+    monkeypatch.setattr(_server_patcher, "resolve_sglang_shape_mode", lambda: "sitecustomize")
+
+
 def test_sitecustomize_profile_records_successful_gc_patch(tmp_path, monkeypatch):
     """Record the graph patch outcome without adding legacy shape-discovery flags."""
     import yaml
 
     _clear_workload_env(monkeypatch)
     counts = _mock_patchers(monkeypatch, vllm=False, sglang=True)
-    monkeypatch.setenv("HYPERLOOM_SGLANG_SHAPE_MODE", "sitecustomize")
+    _force_sitecustomize_shape_mode(monkeypatch)
     src = _profile_yaml(tmp_path, "sglang", {"CONC": 32, "ISL": 256, "OSL": 1024})
     out = materialize_benchmark_config(src, tmp_path)
     envs = yaml.safe_load(out.read_text())["benchmark"]["envs"]
@@ -1129,7 +1136,7 @@ def test_sitecustomize_profile_proceeds_when_gc_patch_is_unavailable(tmp_path, m
 
     _clear_workload_env(monkeypatch)
     counts = _mock_patchers(monkeypatch, vllm=False, sglang=False)
-    monkeypatch.setenv("HYPERLOOM_SGLANG_SHAPE_MODE", "sitecustomize")
+    _force_sitecustomize_shape_mode(monkeypatch)
     src = _profile_yaml(tmp_path, "sglang", {"CONC": 32, "ISL": 256, "OSL": 1024})
     caplog.set_level("WARNING")
     out = materialize_benchmark_config(src, tmp_path)
@@ -1148,7 +1155,7 @@ def test_sitecustomize_non_profile_round_does_not_patch_sglang(tmp_path, monkeyp
 
     _clear_workload_env(monkeypatch)
     counts = _mock_patchers(monkeypatch, vllm=False, sglang=True)
-    monkeypatch.setenv("HYPERLOOM_SGLANG_SHAPE_MODE", "sitecustomize")
+    _force_sitecustomize_shape_mode(monkeypatch)
     src = tmp_path / "baseline_sglang.yaml"
     src.write_text(
         yaml.safe_dump(
@@ -2484,7 +2491,7 @@ async def test_trace_analyze_handler_xdit_defaults_to_tracelens_agent(session_di
     monkeypatch.setattr(sys, "executable", "/task/deps/venv/bin/python")
     monkeypatch.setenv("PATH", "/opt/venv/bin:/usr/bin")
     monkeypatch.delenv("HYPERLOOM_TRACE_ANALYSIS_ROUTE", raising=False)
-    monkeypatch.setattr(ta, "_resolve_tracelens_root", lambda: session_dir)
+    monkeypatch.setattr(session_paths, "tracelens_root", lambda: session_dir)
     monkeypatch.setattr(ta, "_tracelens_root_error", lambda root: None)
     fake_trace = session_dir / "fake_trace_dir"
     fake_trace.mkdir()
@@ -2659,7 +2666,7 @@ async def test_trace_analyze_handler_env_route_forces_bypass(session_dir, monkey
 async def test_trace_analyze_handler_text_gen_defaults_to_tracelens_agent(session_dir, monkeypatch):
     """Text-gen with no explicit route DEFAULTS to the TraceLens ``agent`` route (the shipped default)."""
     monkeypatch.delenv("HYPERLOOM_TRACE_ANALYSIS_ROUTE", raising=False)
-    monkeypatch.setattr(ta, "_resolve_tracelens_root", lambda: session_dir)
+    monkeypatch.setattr(session_paths, "tracelens_root", lambda: session_dir)
     monkeypatch.setattr(ta, "_tracelens_root_error", lambda root: None)
     fake_trace = session_dir / "fake_trace_dir"
     fake_trace.mkdir()
@@ -2713,7 +2720,7 @@ async def test_trace_analyze_handler_rejects_invalid_route_before_dispatch(
     async def fail_run_subprocess(cmd, *, timeout_sec, **_kwargs):
         pytest.fail("invalid route must not launch a subprocess")
 
-    monkeypatch.setattr(ta, "_resolve_tracelens_root", fail_resolve_tracelens_root)
+    monkeypatch.setattr(session_paths, "tracelens_root", fail_resolve_tracelens_root)
     monkeypatch.setattr(ta, "_run_subprocess", fail_run_subprocess)
     payload = {
         "trace_input": str(fake_trace),
@@ -2738,7 +2745,7 @@ async def test_trace_analyze_handler_rejects_invalid_route_before_dispatch(
 async def test_trace_analyze_handler_scriptable_converges_route_params(session_dir, monkeypatch):
     """Scriptable (xDiT) params converge by route: --steady-state-mode generic is TraceLens-only, while --num-denoise-steps is forwarded to BOTH routes (bypass consumes it)."""
     monkeypatch.delenv("HYPERLOOM_TRACE_ANALYSIS_ROUTE", raising=False)
-    monkeypatch.setattr(ta, "_resolve_tracelens_root", lambda: session_dir)
+    monkeypatch.setattr(session_paths, "tracelens_root", lambda: session_dir)
     monkeypatch.setattr(ta, "_tracelens_root_error", lambda root: None)
     fake_trace = session_dir / "fake_trace_dir"
     fake_trace.mkdir()
