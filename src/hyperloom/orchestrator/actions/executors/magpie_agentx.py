@@ -209,13 +209,16 @@ def materialize_agentx(
 
 
 def _default_step_timeouts(bench: dict[str, Any], recipe_options: Mapping[str, str]) -> None:
-    """Give every launch a per-step budget a cold aiter JIT build fits in, lengthening only.
+    """Give every launch a per-step budget a cold aiter JIT build fits in.
 
     A first prefill that builds an aiter JIT module outlasts sglang's 300 s scheduler watchdog and vLLM's own
     step timeout, either of which kills a healthy server, and a candidate that changes the compiled shape pays
-    that cost again on a later round. So the budget is applied to every round, never only the first -- but it
-    is only ever raised: a recipe, candidate or operator asking for at least as long keeps its own value. A
-    candidate that unsets vLLM's variable keeps it unset.
+    that cost again on a later round, so the budget goes on every round rather than only the first. Whatever
+    the launch already names wins over it: a candidate or an operator naming the flag keeps exactly the value
+    it named, longer or shorter, and the recipe's own value governs from the round after the one whose
+    evidence records that argv. The first launch cannot read that argv, so it is the one round where this
+    value can sit on top of a longer one the recipe asked for. A candidate that unsets vLLM's variable keeps
+    it unset.
     """
     from hyperloom.inference_optimizer.grid_server_args import (
         inject_sglang_watchdog_timeout,
