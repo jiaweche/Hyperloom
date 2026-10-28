@@ -22,6 +22,7 @@ from hyperloom.inference_optimizer.breakdown.stop_reasons import ARGV_INVALID
 
 _ENCODING = "utf-8"
 #: vLLM's per-step timeout, at the value the InferenceX vLLM configs set (``assets/configs/baseline_vllm.yaml``).
+#: The variable is also the operator's knob for it, as ``SGLANG_WATCHDOG_TIMEOUT`` is for the sglang watchdog.
 VLLM_STEP_TIMEOUT_ENV = "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"
 VLLM_STEP_TIMEOUT_SEC = 1200
 
@@ -215,9 +216,9 @@ def _default_step_timeouts(bench: dict[str, Any], recipe_options: AbstractSet[st
 def _vllm_step_timeout(bench: dict[str, Any]) -> str | None:
     """The step timeout this launch runs with, or ``None`` when it runs with none.
 
-    The candidate's override wins because Magpie lays ``launch_overrides.env`` over the workload's own envs,
-    which is also why the workload's value has to be read here: writing the default beside it would silently
-    replace it.
+    The three layers are read in the order Magpie resolves them, highest first: it seeds the server env from its
+    own process env, lays the workload's envs over it, then ``launch_overrides.env`` over that. Reading all three
+    is what keeps the default a default -- written beside any of them, the override would silently replace it.
     """
     launch = bench["agentx"].get("launch_overrides") or {}
     if VLLM_STEP_TIMEOUT_ENV in launch.get("unset_env", []):
@@ -225,10 +226,11 @@ def _vllm_step_timeout(bench: dict[str, Any]) -> str | None:
     env = launch.get("env") or {}
     if VLLM_STEP_TIMEOUT_ENV in env:
         return str(env[VLLM_STEP_TIMEOUT_ENV])
-    return next(
+    workload = next(
         (str(value) for name, value in (bench.get("envs") or {}).items() if str(name).upper() == VLLM_STEP_TIMEOUT_ENV),
         None,
     )
+    return workload if workload is not None else os.environ.get(VLLM_STEP_TIMEOUT_ENV) or None
 
 
 def bind_source_evidence(config_path: Path, patches: list[dict[str, Any]]) -> None:

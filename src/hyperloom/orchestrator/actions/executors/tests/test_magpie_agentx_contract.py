@@ -35,6 +35,7 @@ WATCHDOG = ["--watchdog-timeout", "1800"]
 @pytest.fixture
 def source(tmp_path, monkeypatch):
     monkeypatch.delenv("SGLANG_WATCHDOG_TIMEOUT", raising=False)
+    monkeypatch.delenv("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("HYPERLOOM_AGENTX", raising=False)
     monkeypatch.delenv("HYPERLOOM_AGENTIC_BACKEND", raising=False)
     monkeypatch.setenv(BENCHMARK_CONFIG_ENV, "")
@@ -741,6 +742,22 @@ def test_a_recipe_that_keeps_the_watchdog_gets_none_appended(source, tmp_path, r
     assert _watchdog(candidate) == ["3600"]
 
 
+def test_a_recipe_argv_that_sets_the_watchdog_gets_none_appended(source, tmp_path):
+    # The recipe argv is Magpie's, not ours: it reaches us only as recipe_options, never in append_args.
+    from hyperloom.orchestrator.actions.executors.magpie_agentx import (
+        LaunchChanges,
+        apply_launch_changes,
+        materialize_agentx,
+    )
+
+    config = yaml.safe_load(source.read_text())
+    recipe_options = {"--watchdog-timeout"}
+    apply_launch_changes(config["benchmark"], LaunchChanges(), recipe_options=recipe_options)
+
+    assert _watchdog(materialize_agentx(config, tmp_path / "c.yaml", recipe_options=recipe_options)) == []
+    assert _watchdog(materialize_agentx(config, tmp_path / "none.yaml")) == ["1800"]
+
+
 def test_a_candidate_that_drops_the_recipe_watchdog_gets_the_default(source, tmp_path, report):
     # Magpie keeps only its protected options under replace mode and drops whatever remove_args names, so in
     # both of these the recipe's 3600 is gone by launch time and the guard has to supply the default itself.
@@ -795,6 +812,17 @@ def test_a_vllm_launch_keeps_the_step_timeout_its_workload_sets(vllm_source, tmp
     assert _step_timeout(base) is None
     enable_profile(base)
     assert _step_timeout(base) == "3000"
+
+
+def test_a_vllm_launch_keeps_an_exported_step_timeout(vllm_source, tmp_path, monkeypatch):
+    # Magpie seeds the server env from its own process env, which Hyperloom hands it whole, so an export
+    # reaches the server and the override must not be written over it.
+    monkeypatch.setenv("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", "3600")
+    base = materialize_benchmark_config(vllm_source, tmp_path / "base")
+
+    assert _step_timeout(base) is None
+    enable_profile(base)
+    assert _step_timeout(base) == "3600"
 
 
 def test_an_sglang_launch_gets_no_vllm_step_timeout(source, tmp_path):
