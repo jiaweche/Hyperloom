@@ -21,10 +21,13 @@ from hyperloom.inference_optimizer.breakdown.stop_reasons import ARGV_INVALID
 
 
 _ENCODING = "utf-8"
-#: vLLM's per-step timeout, at the value the InferenceX vLLM configs set (``assets/configs/baseline_vllm.yaml``).
-#: The variable is also the operator's knob for it, as ``SGLANG_WATCHDOG_TIMEOUT`` is for the sglang watchdog.
+#: vLLM's per-step timeout. It bounds the same thing sglang's scheduler watchdog does -- one forward step held
+#: open by a cold aiter JIT build -- so it carries ``DEFAULT_SGLANG_WATCHDOG_TIMEOUT_SEC``'s value, not a second
+#: number of its own. The same value is in ``assets/configs/{baseline,profile}_vllm.yaml``, which no import
+#: reaches; change all three together. The variable is also the operator's knob for it, as
+#: ``SGLANG_WATCHDOG_TIMEOUT`` is for the sglang watchdog.
 VLLM_STEP_TIMEOUT_ENV = "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"
-VLLM_STEP_TIMEOUT_SEC = 1200
+VLLM_STEP_TIMEOUT_SEC = 1800
 
 
 class ServerArgvInvalidError(ValueError):

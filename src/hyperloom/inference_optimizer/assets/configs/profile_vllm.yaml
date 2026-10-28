@@ -83,8 +83,9 @@ benchmark:
     DEBUG_CLR_GRAPH_PACKET_CAPTURE: "0"
     DEBUG_HIP_GRAPH_SEGMENT_SCHEDULING: "0"
     DEBUG_HIP_GRAPH_CLASSIC_PATH: "1"
-    # vLLM timeout must be extended during profiling (graph capture is slow)
-    VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1200"
+    # vLLM timeout must be extended during profiling (graph capture is slow);
+    # same budget as sglang's scheduler watchdog.
+    VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1800"
     # --- Profile mode: cap prompts to reduce trace size ---
     PROFILE: "1"
 

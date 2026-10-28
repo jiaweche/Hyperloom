@@ -99,7 +99,7 @@ def test_native_and_fixed_profiles_share_patches_not_launch_controls(tmp_path, m
         & launch.get("env", {}).keys()
     )
     if framework == "vllm":
-        assert launch["env"]["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] == "1200"
+        assert launch["env"]["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] == "1800"
         assert "--profiler-config.max_iterations 128" in fixed["envs"]["EXTRA_VLLM_ARGS"]
     else:
         assert json.loads(fixed["envs"]["PROFILE_EXTRA_BODY"])["num_steps"] == 128
@@ -193,7 +193,7 @@ def test_shape_tool_does_not_reintroduce_an_explicitly_unset_pythonpath(tmp_path
     assert actual["unset_env"] == []
 
 
-@pytest.mark.parametrize("timeout,expected", [("600", "1200"), ("2400", "2400")])
+@pytest.mark.parametrize("timeout,expected", [("600", "1800"), ("2400", "2400")])
 def test_native_vllm_timeout_preserves_a_longer_server_timeout(tmp_path, timeout, expected):
     launch = {
         "version": 1,
