@@ -127,8 +127,8 @@ def test_grid_ablation_removes_the_option_from_its_owning_layers(source, tmp_pat
         output_subdir=tmp_path / "candidate",
     )
     overrides = load_benchmark(candidate)["agentx"]["launch_overrides"]
-    # The evidence above makes this a later round, so the baseline's injected watchdog is gone from it.
-    assert overrides["append_args"] == ["--mem-fraction-static", "0.85"]
+    # This recipe names no watchdog, so the guard still supplies its own, at the end of the composed args.
+    assert overrides["append_args"] == ["--mem-fraction-static", "0.85", *WATCHDOG]
     assert overrides["remove_args"] == ([option] if recipe else [])
 
 
@@ -732,7 +732,7 @@ def _recipe_that_sets_the_watchdog(source, tmp_path, report):
     return base
 
 
-def test_a_recipe_that_keeps_the_watchdog_gets_none_appended(source, tmp_path, report):
+def test_a_recipe_asking_for_longer_keeps_its_own(source, tmp_path, report):
     base = _recipe_that_sets_the_watchdog(source, tmp_path, report)
     candidate = _build_variant_yaml(
         GridRecipe(base_yaml_path=base, base=LaunchLayer()),
@@ -743,23 +743,23 @@ def test_a_recipe_that_keeps_the_watchdog_gets_none_appended(source, tmp_path, r
     assert _watchdog(candidate) == ["3600"]
 
 
-def test_the_baseline_default_is_not_carried_into_later_rounds(source, tmp_path, report):
-    # The baseline's materialized YAML becomes the grid base, so its append_args reach every candidate.
-    from hyperloom.inference_optimizer.agentx.report import native_launch_evidence
-    from hyperloom.orchestrator.actions.executors._launch_evidence import persist_launch_evidence
-
-    base = materialize_benchmark_config(source, tmp_path / "base")
-    receipt = report["agentx_metrics"]["server_launch"]
-    receipt["base_argv"] = [*receipt["effective_argv"]]
-    assert "--watchdog-timeout" not in receipt["base_argv"]
-    persist_launch_evidence(native_launch_evidence(extract_benchmark_measurement(report), base), slot=base.parent)
-    candidate = _build_variant_yaml(
+def test_a_candidate_that_drops_the_recipe_watchdog_is_lengthened_again(source, tmp_path, report):
+    # Magpie keeps only its protected options under replace mode and drops whatever remove_args names, so the
+    # recipe's 3600 governs neither launch and the guard has to supply its own.
+    base = _recipe_that_sets_the_watchdog(source, tmp_path, report)
+    replaced = _build_variant_yaml(
         GridRecipe(base_yaml_path=base, base=LaunchLayer()),
-        GridVariant("c", "--chunked-prefill-size 2048", {}),
-        output_subdir=tmp_path / "c",
+        GridVariant("replace", "--chunked-prefill-size 2048", {}, args_mode="replace"),
+        output_subdir=tmp_path / "replace",
+    )
+    removed = _build_variant_yaml(
+        GridRecipe(base_yaml_path=base, base=LaunchLayer()),
+        GridVariant("remove", "", {}, remove_args=["--watchdog-timeout"]),
+        output_subdir=tmp_path / "remove",
     )
 
-    assert _watchdog(candidate) == []
+    assert _watchdog(replaced) == ["1800"]
+    assert _watchdog(removed) == ["1800"]
 
 
 def test_a_vllm_launch_gets_no_sglang_watchdog(vllm_source, tmp_path):

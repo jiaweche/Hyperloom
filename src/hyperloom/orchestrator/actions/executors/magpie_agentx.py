@@ -11,7 +11,8 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AbstractSet, Any, Mapping
+from types import MappingProxyType
+from typing import Any, Mapping
 
 import yaml
 
@@ -58,20 +59,31 @@ def native_config(path: Path) -> bool:
     return is_magpie_agentx(load_benchmark(path))
 
 
-def recipe_option_names(config_path: Path) -> set[str]:
-    """Canonical options from this config's verified Magpie launch, when available."""
+def recipe_option_names(config_path: Path) -> dict[str, str]:
+    """Canonical options from this config's verified Magpie launch, mapped to their values, when available.
+
+    A bare flag maps to ``""``. Empty when no verified launch matches this config, which is also how a caller
+    tells that it has not run yet.
+    """
     receipt_path = config_path.parent / "launch_evidence.json"
     if not receipt_path.is_file():
-        return set()
+        return {}
     receipt = json.loads(receipt_path.read_text(encoding=_ENCODING))
     digest = "sha256:" + hashlib.sha256(config_path.read_bytes()).hexdigest()
     if receipt.get("recipe_digest") != digest:
-        return set()
-    return {
-        token.partition("=")[0]
-        for token in receipt.get("magpie_server_launch", {}).get("base_argv", [])
-        if token.startswith("--")
-    }
+        return {}
+    options: dict[str, str] = {}
+    name = ""
+    for token in receipt.get("magpie_server_launch", {}).get("base_argv", []):
+        if token.startswith("--"):
+            name, equals, inline = token.partition("=")
+            options[name] = inline if equals else ""
+            if equals:
+                name = ""
+        elif name:
+            options[name] = token
+            name = ""
+    return options
 
 
 def _inherited_server_args(argv: list[str]) -> str:
@@ -128,7 +140,7 @@ def _server_argv(server_args: str, requested: str) -> list[str]:
 
 
 def apply_launch_changes(
-    benchmark: dict[str, Any], changes: LaunchChanges, *, recipe_options: AbstractSet[str] = frozenset()
+    benchmark: dict[str, Any], changes: LaunchChanges, *, recipe_options: Mapping[str, str] = MappingProxyType({})
 ) -> None:
     """Compose a candidate; Magpie validates protected args and environment.
 
@@ -157,7 +169,7 @@ def apply_launch_changes(
     launch["replace_args"] = changes.replace_args or launch.get("replace_args", False)
     # Magpie matches removals against the recipe, before appending our options. A local-only ablation must not
     # become a second removal there; options present in both layers must still be removed from both.
-    recipe_removals = set(changes.remove_args) - (appended_options - recipe_options)
+    recipe_removals = set(changes.remove_args) - (appended_options - recipe_options.keys())
     launch["remove_args"] = sorted(set(launch.get("remove_args", [])) | recipe_removals)
     env = launch.setdefault("env", {})
     for name in changes.unset_env:
@@ -171,7 +183,7 @@ def materialize_agentx(
     output: Path,
     *,
     model_path: str | None = None,
-    recipe_options: AbstractSet[str] = frozenset(),
+    recipe_options: Mapping[str, str] = MappingProxyType({}),
 ) -> Path:
     """Keep the workload YAML intact while changing only the server candidate."""
     config = copy.deepcopy(config)
@@ -189,16 +201,19 @@ def materialize_agentx(
     return output
 
 
-def _default_step_timeouts(bench: dict[str, Any], recipe_options: AbstractSet[str]) -> None:
-    """Carry a launch that has never run through its cold start, and stop there.
+def _default_step_timeouts(bench: dict[str, Any], recipe_options: Mapping[str, str]) -> None:
+    """Give every launch a per-step budget a cold aiter JIT build fits in, lengthening only.
 
     A first prefill that builds an aiter JIT module outlasts sglang's 300 s scheduler watchdog and vLLM's own
-    step timeout, either of which kills a healthy server. Once that launch has run, its evidence names the
-    recipe's own argv, the JIT cache is warm and the framework defaults are enough again -- so the guard's value
-    is removed rather than carried, which is what ``INJECTED_LAUNCH_FLAGS`` means by sized for the run that
-    injected it. A candidate that unsets vLLM's variable keeps it unset.
+    step timeout, either of which kills a healthy server, and a candidate that changes the compiled shape pays
+    that cost again on a later round. So the budget is applied to every round, never only the first -- but it
+    is only ever raised: a recipe, candidate or operator asking for at least as long keeps its own value. A
+    candidate that unsets vLLM's variable keeps it unset.
     """
-    from hyperloom.inference_optimizer.grid_server_args import inject_sglang_watchdog_timeout
+    from hyperloom.inference_optimizer.grid_server_args import (
+        inject_sglang_watchdog_timeout,
+        resolve_sglang_watchdog_timeout,
+    )
 
     launch = bench["agentx"].setdefault("launch_overrides", {"version": 1})
     if str(bench.get("framework") or "").lower() == "vllm":
@@ -206,18 +221,33 @@ def _default_step_timeouts(bench: dict[str, Any], recipe_options: AbstractSet[st
             return
         launch.setdefault("env", {})[VLLM_STEP_TIMEOUT_ENV] = str(VLLM_STEP_TIMEOUT_SEC)
         return
-    if recipe_options:
-        # A non-empty set is this launch's own verified argv, which every recipe fills with --model-path, --host
-        # and --port: it is how the guard knows the launch has already run. Drop the value an earlier round
-        # injected rather than let it ride in the inherited append_args, where it lands after the recipe argv and
-        # would hold the whole session at the guard's number. A token carrying exactly the value this guard
-        # resolves is the guard's own; nothing else in a candidate names this flag.
-        launch["append_args"] = _drop_injected_watchdog(launch.get("append_args", []))
+    # Start from this launch without the guard's own earlier value: it rides in the inherited append_args and
+    # lands after the recipe argv, so left alone it would hold every later round at the guard's number.
+    argv = _drop_injected_watchdog(launch.get("append_args", []))
+    if _recipe_watchdog_sec(launch, recipe_options) >= resolve_sglang_watchdog_timeout():
+        # The recipe already asks for at least as long, and it will survive this launch. Leave it to govern:
+        # this guard lengthens a watchdog, it never shortens one.
+        launch["append_args"] = argv
         return
-    guarded = inject_sglang_watchdog_timeout(
-        _inherited_server_args(launch.get("append_args", [])), bench.get("framework")
-    )
+    guarded = inject_sglang_watchdog_timeout(_inherited_server_args(argv), bench.get("framework"))
     launch["append_args"] = _server_argv(guarded, guarded)
+
+
+def _recipe_watchdog_sec(launch: dict[str, Any], recipe_options: Mapping[str, str]) -> float:
+    """The recipe's own watchdog in seconds as this launch will run it, or ``0`` when it will not run one.
+
+    ``recipe_options`` is the previous launch's verified argv, so it describes what Magpie starts from; what it
+    keeps is this launch's business. Under ``replace_args`` Magpie holds only its protected options, and
+    ``remove_args`` takes whatever it names, so neither leaves the recipe's watchdog in effect.
+    """
+    from hyperloom.inference_optimizer.grid_server_args import SGLANG_WATCHDOG_FLAG
+
+    if launch.get("replace_args") or SGLANG_WATCHDOG_FLAG in launch.get("remove_args", []):
+        return 0
+    try:
+        return float(recipe_options.get(SGLANG_WATCHDOG_FLAG, ""))
+    except ValueError:
+        return 0
 
 
 def _drop_injected_watchdog(argv: list[str]) -> list[str]:
