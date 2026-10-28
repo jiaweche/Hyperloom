@@ -164,10 +164,12 @@ def materialize_agentx(
     output: Path,
     *,
     model_path: str | None = None,
+    recipe_options: AbstractSet[str] = frozenset(),
 ) -> Path:
     """Keep the workload YAML intact while changing only the server candidate."""
     config = copy.deepcopy(config)
     bench = config["benchmark"]
+    _default_watchdog(bench, recipe_options)
     envs = bench.setdefault("envs", {})
     if model_path and Path(model_path).is_dir():
         envs["MODEL_PATH"] = model_path
@@ -178,6 +180,20 @@ def materialize_agentx(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(yaml.safe_dump(config, sort_keys=False), encoding=_ENCODING)
     return output
+
+
+def _default_watchdog(bench: dict[str, Any], recipe_options: AbstractSet[str]) -> None:
+    """Give an sglang launch the scheduler watchdog the InferenceX launch gets, unless the recipe or the candidate sets
+    one: a first prefill that builds an aiter JIT module outlasts sglang's 300 s default, which kills the server."""
+    from hyperloom.inference_optimizer.grid_server_args import SGLANG_WATCHDOG_FLAG, inject_sglang_watchdog_timeout
+
+    if SGLANG_WATCHDOG_FLAG in recipe_options:
+        return
+    launch = bench["agentx"].setdefault("launch_overrides", {"version": 1})
+    guarded = inject_sglang_watchdog_timeout(
+        _inherited_server_args(launch.get("append_args", [])), bench.get("framework")
+    )
+    launch["append_args"] = _server_argv(guarded, guarded)
 
 
 def bind_source_evidence(config_path: Path, patches: list[dict[str, Any]]) -> None:
@@ -332,7 +348,7 @@ def materialize_variant(
         ),
         recipe_options=recipe_options,
     )
-    path = materialize_agentx(config, output / "config.yaml", model_path=model_path)
+    path = materialize_agentx(config, output / "config.yaml", model_path=model_path, recipe_options=recipe_options)
     bind_source_evidence(path, variant.source_patches)
     apply_native_runtime(path, variant.runtime_override, variant.overlay_pythonpath)
     return path

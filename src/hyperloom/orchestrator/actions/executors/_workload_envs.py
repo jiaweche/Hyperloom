@@ -1639,6 +1639,7 @@ def materialize_benchmark_config(
         config,
         output_dir / options.out_name,
         model_path=target.model_path,
+        recipe_options=recipe_options,
     )
 
 
