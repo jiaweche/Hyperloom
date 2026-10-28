@@ -737,3 +737,28 @@ def test_a_recipe_that_sets_the_watchdog_gets_none_appended(source, tmp_path, re
 
 def test_a_vllm_launch_gets_no_sglang_watchdog(vllm_source, tmp_path):
     assert _watchdog(materialize_benchmark_config(vllm_source, tmp_path / "base")) == []
+
+
+def _step_timeout(path):
+    return load_benchmark(path)["agentx"]["launch_overrides"]["env"].get("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS")
+
+
+def test_a_vllm_launch_gets_the_step_timeout_the_inferencex_launch_gets(vllm_source, tmp_path):
+    base = materialize_benchmark_config(vllm_source, tmp_path / "base")
+    candidate = _build_variant_yaml(
+        GridRecipe(base_yaml_path=base), GridVariant("c", "--max-num-seqs 32", {}), output_subdir=tmp_path / "c"
+    )
+
+    assert _step_timeout(base) == _step_timeout(candidate) == "1200"
+
+
+def test_a_vllm_launch_that_sets_or_unsets_the_step_timeout_keeps_its_choice(vllm_source, tmp_path):
+    named = LaunchLayer(extra_envs={"VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "600"})
+    unset = LaunchLayer(unset_envs=["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"])
+
+    assert _step_timeout(materialize_benchmark_config(vllm_source, tmp_path / "named", launch=named)) == "600"
+    assert _step_timeout(materialize_benchmark_config(vllm_source, tmp_path / "unset", launch=unset)) is None
+
+
+def test_an_sglang_launch_gets_no_vllm_step_timeout(source, tmp_path):
+    assert _step_timeout(materialize_benchmark_config(source, tmp_path / "base")) is None

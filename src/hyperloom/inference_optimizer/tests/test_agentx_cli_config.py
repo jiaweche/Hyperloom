@@ -102,7 +102,8 @@ def test_standard_cli_generates_native_yaml_and_candidate_controls(tmp_path, mon
     launch = load_benchmark(candidate)["agentx"]["launch_overrides"]
     watchdog = ["--watchdog-timeout", "1800"] if framework == "sglang" else []
     assert launch["append_args"] == ["--disable-custom-all-reduce", *watchdog]
-    assert launch["env"] == {"TEST_SERVER_KNOB": "2"}
+    step_timeout = {"VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "1200"} if framework == "vllm" else {}
+    assert launch["env"] == {"TEST_SERVER_KNOB": "2", **step_timeout}
     enable_profile(candidate)
     profiled = load_benchmark(candidate)["profiler"]["torch_profiler"]
     assert profiled["enabled"] is True
