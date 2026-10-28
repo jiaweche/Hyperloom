@@ -193,15 +193,42 @@ def _default_step_timeouts(bench: dict[str, Any], recipe_options: AbstractSet[st
 
     launch = bench["agentx"].setdefault("launch_overrides", {"version": 1})
     if str(bench.get("framework") or "").lower() == "vllm":
-        if VLLM_STEP_TIMEOUT_ENV not in launch.get("unset_env", []):
-            launch.setdefault("env", {}).setdefault(VLLM_STEP_TIMEOUT_ENV, str(VLLM_STEP_TIMEOUT_SEC))
+        if VLLM_STEP_TIMEOUT_ENV in launch.get("unset_env", []) or _vllm_step_timeout(bench) is not None:
+            return
+        launch.setdefault("env", {})[VLLM_STEP_TIMEOUT_ENV] = str(VLLM_STEP_TIMEOUT_SEC)
         return
-    if SGLANG_WATCHDOG_FLAG in recipe_options:
+    # ``recipe_options`` names the last launch's recipe argv, which this launch may not run: Magpie keeps only
+    # its protected options under ``replace_args`` and drops whatever ``remove_args`` names, so a flag that will
+    # not survive is not one the recipe still sets.
+    if (
+        SGLANG_WATCHDOG_FLAG in recipe_options
+        and not launch.get("replace_args")
+        and SGLANG_WATCHDOG_FLAG not in launch.get("remove_args", [])
+    ):
         return
     guarded = inject_sglang_watchdog_timeout(
         _inherited_server_args(launch.get("append_args", [])), bench.get("framework")
     )
     launch["append_args"] = _server_argv(guarded, guarded)
+
+
+def _vllm_step_timeout(bench: dict[str, Any]) -> str | None:
+    """The step timeout this launch runs with, or ``None`` when it runs with none.
+
+    The candidate's override wins because Magpie lays ``launch_overrides.env`` over the workload's own envs,
+    which is also why the workload's value has to be read here: writing the default beside it would silently
+    replace it.
+    """
+    launch = bench["agentx"].get("launch_overrides") or {}
+    if VLLM_STEP_TIMEOUT_ENV in launch.get("unset_env", []):
+        return None
+    env = launch.get("env") or {}
+    if VLLM_STEP_TIMEOUT_ENV in env:
+        return str(env[VLLM_STEP_TIMEOUT_ENV])
+    return next(
+        (str(value) for name, value in (bench.get("envs") or {}).items() if str(name).upper() == VLLM_STEP_TIMEOUT_ENV),
+        None,
+    )
 
 
 def bind_source_evidence(config_path: Path, patches: list[dict[str, Any]]) -> None:
@@ -264,12 +291,11 @@ def enable_profile(config_path: Path) -> None:
             profile_env["PYTHONPATH"] = ""
         apply_sglang_shape_tool(profile_env, shape_discovery=shape_discovery_enabled(bench))
     if framework == "vllm":
-        default = str(VLLM_STEP_TIMEOUT_SEC)
-        inherited = (
-            default if VLLM_STEP_TIMEOUT_ENV in launch["unset_env"] else os.environ.get(VLLM_STEP_TIMEOUT_ENV, default)
-        )
+        # Capture holds the step open longer than serving does, so the profiled run floors whatever it would
+        # otherwise launch with.
+        running = _vllm_step_timeout(bench)
         profile_env[VLLM_STEP_TIMEOUT_ENV] = str(
-            max(VLLM_STEP_TIMEOUT_SEC, int(server_env.get(VLLM_STEP_TIMEOUT_ENV, inherited)))
+            max(VLLM_STEP_TIMEOUT_SEC, int(running) if running else VLLM_STEP_TIMEOUT_SEC)
         )
     apply_launch_changes(bench, LaunchChanges(env=profile_env))
     torch_profiler = bench.setdefault("profiler", {}).setdefault("torch_profiler", {})

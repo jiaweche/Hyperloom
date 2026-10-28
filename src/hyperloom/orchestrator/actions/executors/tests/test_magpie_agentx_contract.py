@@ -716,7 +716,8 @@ def test_a_launch_that_sets_the_watchdog_keeps_its_own(source, tmp_path):
     assert _watchdog(base) == ["600"]
 
 
-def test_a_recipe_that_sets_the_watchdog_gets_none_appended(source, tmp_path, report):
+def _recipe_that_sets_the_watchdog(source, tmp_path, report):
+    """A base whose verified recipe carries ``--watchdog-timeout 3600``, as its launch evidence records."""
     from hyperloom.inference_optimizer.agentx.report import native_launch_evidence
     from hyperloom.orchestrator.actions.executors._launch_evidence import persist_launch_evidence
 
@@ -726,13 +727,37 @@ def test_a_recipe_that_sets_the_watchdog_gets_none_appended(source, tmp_path, re
     receipt = report["agentx_metrics"]["server_launch"]
     receipt["base_argv"] = [*receipt["effective_argv"], "--watchdog-timeout", "3600"]
     persist_launch_evidence(native_launch_evidence(extract_benchmark_measurement(report), base), slot=base.parent)
+    return base
+
+
+def test_a_recipe_that_keeps_the_watchdog_gets_none_appended(source, tmp_path, report):
+    base = _recipe_that_sets_the_watchdog(source, tmp_path, report)
     candidate = _build_variant_yaml(
         GridRecipe(base_yaml_path=base, base=LaunchLayer()),
-        GridVariant("c", "--chunked-prefill-size 2048", {}, args_mode="replace"),
+        GridVariant("c", "--chunked-prefill-size 2048", {}),
         output_subdir=tmp_path / "c",
     )
 
-    assert _watchdog(candidate) == []
+    assert _watchdog(candidate) == ["3600"]
+
+
+def test_a_candidate_that_drops_the_recipe_watchdog_gets_the_default(source, tmp_path, report):
+    # Magpie keeps only its protected options under replace mode and drops whatever remove_args names, so in
+    # both of these the recipe's 3600 is gone by launch time and the guard has to supply the default itself.
+    base = _recipe_that_sets_the_watchdog(source, tmp_path, report)
+    replaced = _build_variant_yaml(
+        GridRecipe(base_yaml_path=base, base=LaunchLayer()),
+        GridVariant("replace", "--chunked-prefill-size 2048", {}, args_mode="replace"),
+        output_subdir=tmp_path / "replace",
+    )
+    removed = _build_variant_yaml(
+        GridRecipe(base_yaml_path=base, base=LaunchLayer()),
+        GridVariant("remove", "", {}, remove_args=["--watchdog-timeout"]),
+        output_subdir=tmp_path / "remove",
+    )
+
+    assert _watchdog(replaced) == ["1800"]
+    assert _watchdog(removed) == ["1800"]
 
 
 def test_a_vllm_launch_gets_no_sglang_watchdog(vllm_source, tmp_path):
@@ -758,6 +783,18 @@ def test_a_vllm_launch_that_sets_or_unsets_the_step_timeout_keeps_its_choice(vll
 
     assert _step_timeout(materialize_benchmark_config(vllm_source, tmp_path / "named", launch=named)) == "600"
     assert _step_timeout(materialize_benchmark_config(vllm_source, tmp_path / "unset", launch=unset)) is None
+
+
+def test_a_vllm_launch_keeps_the_step_timeout_its_workload_sets(vllm_source, tmp_path):
+    config = yaml.safe_load(vllm_source.read_text())
+    config["benchmark"]["envs"]["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] = "3000"
+    vllm_source.write_text(yaml.safe_dump(config))
+    base = materialize_benchmark_config(vllm_source, tmp_path / "base")
+
+    # Nothing is written beside the workload's own value, which Magpie would otherwise lay the override over.
+    assert _step_timeout(base) is None
+    enable_profile(base)
+    assert _step_timeout(base) == "3000"
 
 
 def test_an_sglang_launch_gets_no_vllm_step_timeout(source, tmp_path):
