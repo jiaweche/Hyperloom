@@ -798,6 +798,26 @@ def test_the_baseline_default_is_not_carried_into_later_rounds(source, tmp_path,
     assert _watchdog(candidate) == []
 
 
+def test_the_baseline_default_goes_even_when_the_recipe_names_no_watchdog(source, tmp_path, report):
+    # The common shape: the recipe argv carries no --watchdog-timeout at all. The guard still has to let go of
+    # the value it injected, or "only on a launch that has never run" holds for no real recipe.
+    from hyperloom.inference_optimizer.agentx.report import native_launch_evidence
+    from hyperloom.orchestrator.actions.executors._launch_evidence import persist_launch_evidence
+
+    base = materialize_benchmark_config(source, tmp_path / "base")
+    receipt = report["agentx_metrics"]["server_launch"]
+    receipt["base_argv"] = [*receipt["effective_argv"]]
+    assert "--watchdog-timeout" not in receipt["base_argv"]
+    persist_launch_evidence(native_launch_evidence(extract_benchmark_measurement(report), base), slot=base.parent)
+    candidate = _build_variant_yaml(
+        GridRecipe(base_yaml_path=base, base=LaunchLayer()),
+        GridVariant("c", "--chunked-prefill-size 2048", {}),
+        output_subdir=tmp_path / "c",
+    )
+
+    assert _watchdog(candidate) == []
+
+
 def test_a_vllm_launch_gets_no_sglang_watchdog(vllm_source, tmp_path):
     assert _watchdog(materialize_benchmark_config(vllm_source, tmp_path / "base")) == []
 

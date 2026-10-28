@@ -198,7 +198,7 @@ def _default_step_timeouts(bench: dict[str, Any], recipe_options: AbstractSet[st
     is removed rather than carried, which is what ``INJECTED_LAUNCH_FLAGS`` means by sized for the run that
     injected it. A candidate that unsets vLLM's variable keeps it unset.
     """
-    from hyperloom.inference_optimizer.grid_server_args import SGLANG_WATCHDOG_FLAG, inject_sglang_watchdog_timeout
+    from hyperloom.inference_optimizer.grid_server_args import inject_sglang_watchdog_timeout
 
     launch = bench["agentx"].setdefault("launch_overrides", {"version": 1})
     if str(bench.get("framework") or "").lower() == "vllm":
@@ -206,11 +206,12 @@ def _default_step_timeouts(bench: dict[str, Any], recipe_options: AbstractSet[st
             return
         launch.setdefault("env", {})[VLLM_STEP_TIMEOUT_ENV] = str(VLLM_STEP_TIMEOUT_SEC)
         return
-    if SGLANG_WATCHDOG_FLAG in recipe_options:
-        # This launch has evidence, so the recipe's own argv is known and governs. Drop the value an earlier
-        # round injected: it rides in the inherited append_args, lands after the recipe argv and would hold the
-        # whole session at the guard's number. Candidates do not name this flag, so a token carrying exactly the
-        # value this guard resolves is the guard's own.
+    if recipe_options:
+        # A non-empty set is this launch's own verified argv, which every recipe fills with --model-path, --host
+        # and --port: it is how the guard knows the launch has already run. Drop the value an earlier round
+        # injected rather than let it ride in the inherited append_args, where it lands after the recipe argv and
+        # would hold the whole session at the guard's number. A token carrying exactly the value this guard
+        # resolves is the guard's own; nothing else in a candidate names this flag.
         launch["append_args"] = _drop_injected_watchdog(launch.get("append_args", []))
         return
     guarded = inject_sglang_watchdog_timeout(
