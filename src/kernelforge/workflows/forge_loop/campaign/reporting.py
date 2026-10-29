@@ -194,7 +194,7 @@ class BestResultPublisher:
     def _load_json(path: Path, *, label: str) -> dict:
         try:
             value = json.loads(path.read_text())
-        except Exception as error:
+        except (OSError, ValueError) as error:
             raise ValueError(f"invalid {label}: {path}") from error
         if not isinstance(value, dict):
             raise ValueError(f"invalid {label}: {path}")
