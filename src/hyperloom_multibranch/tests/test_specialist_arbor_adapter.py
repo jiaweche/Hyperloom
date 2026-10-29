@@ -20,18 +20,16 @@ from hyperloom_multibranch.specialist import arbor_adapter
 from hyperloom_multibranch.specialist.agent_manifest import REFUSED_FILE, AgentManifest
 from hyperloom_multibranch.specialist.agent_onboarding import PROFILE_FILE, AgentSpec, make_ready
 from hyperloom_multibranch.specialist.arbor_adapter import (
-    CONFIG_FILE,
-    DOSSIER_CONFIG_FILE,
-    DOSSIER_SESSION_DIR,
+    BRANCH_RUN,
+    DOSSIER_PASS,
     INSTALL,
     MARKERS,
-    SESSION_DIR,
+    ArborCheckout,
     ArborRefused,
     SplitFailed,
     arbor_config,
     arbor_manifest,
     bench_command,
-    dossier_manifest,
     is_arbor,
     mapped,
     refusals,
@@ -61,6 +59,7 @@ MODEL = "/models/Qwen3-14B-FP8"
 CLIENT = GateClient("/opt/InferenceX", "Qwen/Qwen3-14B-FP8", 1024, 1024, 8, 0.8, None, False)
 PORT = 31110
 DEADLINE = 1793244000.7
+CONFIG_FILE, SESSION_DIR = BRANCH_RUN.config_file, BRANCH_RUN.session_dir
 LAUNCH = f"python3 -m arbor run --config {CONFIG_FILE}"
 REASONS = ["component.plan[0]: m-attn: no title", "component mode needs a deadline"]
 #: A start table as MB gives its variable: the private copies of the image's default tables, then the start's rows.
@@ -188,7 +187,7 @@ def test_arbor_s_config_follows_from_the_spec_on_the_serving_pack_in_component_m
     spec, checkout = _spec(tmp_path), tmp_path / "checkout"
     session = checkout / SESSION_DIR
 
-    config = arbor_config(spec, checkout, session)
+    config = arbor_config(spec, checkout, BRANCH_RUN)
 
     validator = checkout / "packs" / "serving" / "validator"
     assert (config["pack"], config["mode"], config["docker_container"]) == ("serving", "component", "@host")
@@ -212,7 +211,7 @@ def test_arbor_s_config_follows_from_the_spec_on_the_serving_pack_in_component_m
 
 
 def test_a_spec_with_no_client_runs_the_pack_s_bench_on_a_server_named_by_its_model_path(tmp_path: Path) -> None:
-    config = arbor_config(_spec(tmp_path, client="", knowledge=""), tmp_path / "checkout", tmp_path / "session")
+    config = arbor_config(_spec(tmp_path, client="", knowledge=""), tmp_path / "checkout", BRANCH_RUN)
 
     assert config["model_name"] == MODEL
     assert "bench_command" not in config["component"] and "notes" not in config["component"]
@@ -274,7 +273,7 @@ def test_a_client_arbor_could_not_fill_is_refused_with_why(client: str, said: st
 def test_arbor_s_session_is_the_directory_its_manifest_s_snapshots_name(tmp_path: Path) -> None:
     spec, checkout = _spec(tmp_path), _write(tmp_path / "checkout", CHECKOUT_FILES)
 
-    manifest = arbor_manifest(spec, "git@host:org/arbor", "abc123", checkout, {})
+    manifest = arbor_manifest(spec, ArborCheckout("git@host:org/arbor", "abc123", checkout, {}), BRANCH_RUN)
 
     assert manifest.snapshots is not None
     session = checkout / manifest.snapshots.session
@@ -320,7 +319,9 @@ def test_the_branch_s_share_of_the_directions_is_arbor_s_plan(tmp_path: Path) ->
     _write(plan.parent, {plan.name: json.dumps({"directions": [{"id": "m-attn", "kind": "increment", "title": "a"}]})})
     checkout = _write(tmp_path / "checkout", CHECKOUT_FILES)
 
-    manifest = arbor_manifest(_spec(tmp_path, plan=str(plan)), "arbor", "abc123", checkout, {})
+    manifest = arbor_manifest(
+        _spec(tmp_path, plan=str(plan)), ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN
+    )
 
     assert manifest.config["component"]["plan"] == str(plan)
     assert "profile" not in manifest.config["component"]
@@ -331,7 +332,7 @@ def test_the_branch_s_share_of_the_directions_is_arbor_s_plan(tmp_path: Path) ->
     [("shares/share-1.json", "not an absolute path"), ("/nonexistent/share-1.json", "cannot be read")],
 )
 def test_a_plan_arbor_could_not_read_is_refused(tmp_path: Path, plan: str, said: str) -> None:
-    config = arbor_config(_spec(tmp_path, plan=plan), tmp_path / "checkout", tmp_path / "session")
+    config = arbor_config(_spec(tmp_path, plan=plan), tmp_path / "checkout", BRANCH_RUN)
 
     assert any(said in reason for reason in refusals(config, {}))
 
@@ -340,18 +341,18 @@ def test_the_dossier_pass_stops_at_the_map_in_a_session_of_its_own_and_takes_no_
     spec = _spec(tmp_path, plan="/shares/share-1.json")
     checkout = _write(tmp_path / "checkout", CHECKOUT_FILES)
 
-    manifest = dossier_manifest(spec, "arbor", "abc123", checkout, {})
+    manifest = arbor_manifest(spec, ArborCheckout("arbor", "abc123", checkout, {}), DOSSIER_PASS)
 
     component = manifest.config["component"]
     assert component["stop_at"] == "map" and "plan" not in component and "profile" not in component
-    assert (checkout / DOSSIER_SESSION_DIR).is_dir()
-    assert manifest.config_file == DOSSIER_CONFIG_FILE and manifest.snapshots is not None
-    assert manifest.snapshots.session == DOSSIER_SESSION_DIR != SESSION_DIR
+    assert (checkout / DOSSIER_PASS.session_dir).is_dir()
+    assert manifest.config_file == DOSSIER_PASS.config_file and manifest.snapshots is not None
+    assert manifest.snapshots.session == DOSSIER_PASS.session_dir != SESSION_DIR
 
 
 def test_what_arbor_refuses_at_its_start_is_refused_before_it_starts(tmp_path: Path) -> None:
     spec = _spec(tmp_path, deadline=0.0, root="f" * 40)
-    config = arbor_config(spec, tmp_path / "empty-checkout", tmp_path / "session")
+    config = arbor_config(spec, tmp_path / "empty-checkout", BRANCH_RUN)
     config = {**config, "docker_container": "arbor-c", "component": {**config["component"], "x": 1}}
 
     reasons = refusals(config, {"ARBOR_ROLL": "1"})
@@ -361,10 +362,10 @@ def test_what_arbor_refuses_at_its_start_is_refused_before_it_starts(tmp_path: P
         "no deadline: component.deadline is 0",
         "docker_container is 'arbor-c', not @host",
         "ARBOR_ROLL=1 is set",
-        f"component.root {'f' * 40} is not a commit of the workspace {spec.workspace}",
         "bench_script",
         "correctness_script",
         "the pack 'serving' has no pack.yaml",
+        f"component.root {'f' * 40} is not a commit of the workspace {spec.workspace}",
     ]
     assert len(reasons) == len(expected) and all(said in reason for said, reason in zip(expected, reasons))
 

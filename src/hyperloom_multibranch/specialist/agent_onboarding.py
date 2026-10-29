@@ -40,7 +40,9 @@ from typing import Protocol
 from hyperloom_multibranch.contracts.blackboard.records import OpShares
 from hyperloom_multibranch.specialist.agent_manifest import AgentManifest, ManifestError
 from hyperloom_multibranch.specialist.arbor_adapter import (
+    BRANCH_RUN,
     EXIT_REFUSED,
+    ArborCheckout,
     ArborRefused,
     arbor_manifest,
     is_arbor,
@@ -256,7 +258,9 @@ async def _attempt(
     adapted = is_arbor(checkout)
     if adapted:
         try:
-            manifest = await asyncio.to_thread(arbor_manifest, spec, source, commit, checkout)
+            manifest = await asyncio.to_thread(
+                arbor_manifest, spec, ArborCheckout(source, commit, checkout), BRANCH_RUN
+            )
         except ArborRefused as error:
             raise ConfigRefused(f"Arbor would refuse the config written for it: {error}") from error
     else:

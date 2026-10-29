@@ -15,7 +15,7 @@ would write the same config, so a refusal, this side's or Arbor's own, fails the
 
 The spec's ``plan``, the file of the branch's share of the session's directions, becomes ``component.plan``. Those
 shares come from one map, which Arbor's dossier pass writes on one lease before the branches open
-(:func:`dossier_manifest`, its end read by :func:`mapped`), split by Arbor's own command line
+(:data:`DOSSIER_PASS`, its end read by :func:`mapped`), split by Arbor's own command line
 (:func:`split_directions`); the scheduling calls these. The root's op shares are not the adapter's: the preflight sets
 ``component.profile`` for Arbor as for any agent run as a component
 (:func:`~hyperloom_multibranch.specialist.agent_onboarding.component_config`).
@@ -30,6 +30,7 @@ import re
 import shlex
 import subprocess
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -46,13 +47,9 @@ HOST = "hyperloom-mb"
 PACK = "serving"
 BENCH_SCRIPT = "validator/bench.sh"
 CORRECTNESS_SCRIPT = "validator/correctness.sh"
-#: Where MB writes Arbor's config and keeps its session, in Arbor's checkout: the config must be under the checkout,
-#: where Arbor finds its packs from it. The dossier pass has a config and a session of its own.
+#: Where MB writes Arbor's configs and keeps its sessions, in Arbor's checkout: a config must be under the checkout,
+#: where Arbor finds its packs from it.
 MB_DIR = "hyperloom-mb"
-CONFIG_FILE = f"{MB_DIR}/config.json"
-SESSION_DIR = f"{MB_DIR}/session"
-DOSSIER_CONFIG_FILE = f"{MB_DIR}/dossier.json"
-DOSSIER_SESSION_DIR = f"{MB_DIR}/dossier"
 OUTBOX = "keeps"
 #: The interpreter Arbor runs under, the sandbox's.
 PYTHON = "python3"
@@ -108,58 +105,58 @@ class SplitFailed(RuntimeError):
     """Arbor could not split a map into shares; the message says what it printed."""
 
 
+@dataclass(frozen=True)
+class ArborCheckout:
+    """Arbor at ``commit`` of ``source``, checked out at ``path``, run with ``env``."""
+
+    source: str
+    commit: str
+    path: Path
+    env: Mapping[str, str] = field(default_factory=lambda: os.environ)
+
+
+@dataclass(frozen=True)
+class ArborRun:
+    """One run of Arbor in its checkout: where its config and its session are, and where it stops of itself, ``None``
+    when only its deadline or MB stops it."""
+
+    config_file: str
+    session_dir: str
+    stop_at: str | None = None
+
+
+#: A branch's run, and the dossier pass, which writes the dossier and its map on one lease before the branches open and
+#: exits 0 once the map is set (:func:`mapped`).
+BRANCH_RUN = ArborRun(f"{MB_DIR}/config.json", f"{MB_DIR}/session")
+DOSSIER_PASS = ArborRun(f"{MB_DIR}/dossier.json", f"{MB_DIR}/dossier", stop_at="map")
+
+
 def is_arbor(checkout: Path) -> bool:
     """Whether ``checkout`` is Arbor's, which runs as a component of a host: it has every one of :data:`MARKERS`."""
 
     return all((checkout / marker).is_file() for marker in MARKERS)
 
 
-def arbor_manifest(
-    spec: AgentSpec, source: str, commit: str, checkout: Path, env: Mapping[str, str] = os.environ
-) -> AgentManifest:
-    """The manifest of Arbor at ``commit`` of ``source``, checked out in ``checkout``, for the branch ``spec`` names,
-    its session made; raise :class:`ArborRefused` with every reason Arbor would refuse its config for, when run with
-    ``env``."""
+def arbor_manifest(spec: AgentSpec, checkout: ArborCheckout, run: ArborRun) -> AgentManifest:
+    """The manifest of ``run`` of Arbor in ``checkout`` for the branch ``spec`` names, its session made; raise
+    :class:`ArborRefused` with every reason Arbor would refuse its config for.
 
-    return _manifest(spec, source, commit, checkout, CONFIG_FILE, SESSION_DIR, env, stop_at_map=False)
+    The root's op shares are its caller's to add, as the preflight does for every agent run as a component; the
+    dossier pass profiles only what they do not cover."""
 
-
-def dossier_manifest(
-    spec: AgentSpec, source: str, commit: str, checkout: Path, env: Mapping[str, str] = os.environ
-) -> AgentManifest:
-    """The manifest of Arbor's dossier pass for ``spec``, as :func:`arbor_manifest` makes the branch's, with a config
-    and a session of its own: it writes the dossier and its map and exits 0 once the map is set (:func:`mapped`). The
-    spec's plan is left out: the pass writes the map a plan would come from. Its caller gives it the root's op shares
-    as the preflight does, so that it profiles only what they do not cover: ``component_config`` with the
-    ``root_profile`` written in its session."""
-
-    return _manifest(spec, source, commit, checkout, DOSSIER_CONFIG_FILE, DOSSIER_SESSION_DIR, env, stop_at_map=True)
-
-
-def _manifest(
-    spec: AgentSpec,
-    source: str,
-    commit: str,
-    checkout: Path,
-    config_file: str,
-    session_dir: str,
-    env: Mapping[str, str],
-    *,
-    stop_at_map: bool,
-) -> AgentManifest:
-    session = checkout.absolute() / session_dir
-    config = arbor_config(spec, checkout.absolute(), session, stop_at_map=stop_at_map)
-    reasons = refusals(config, env)
+    path = checkout.path.absolute()
+    config = arbor_config(spec, path, run)
+    reasons = refusals(config, checkout.env)
     if reasons:
         raise ArborRefused(reasons)
-    session.mkdir(parents=True, exist_ok=True)
-    launch = f"{PYTHON} -m arbor run --config {shlex.quote(config_file)}"
+    (path / run.session_dir).mkdir(parents=True, exist_ok=True)
+    launch = f"{PYTHON} -m arbor run --config {shlex.quote(run.config_file)}"
     return AgentManifest.read(
         {
-            "source": source,
-            "commit": commit,
+            "source": checkout.source,
+            "commit": checkout.commit,
             "install": list(INSTALL),
-            "config_file": config_file,
+            "config_file": run.config_file,
             "config": config,
             "launch": launch,
             "resume": launch,
@@ -167,17 +164,17 @@ def _manifest(
             "config_source": None,
             "summary_field": "",
             "needs": ["anthropic"],
-            "ledger": {"path": f"{session_dir}/ledger.jsonl", **LEDGER},
-            "snapshots": {"session": session_dir},
+            "ledger": {"path": f"{run.session_dir}/ledger.jsonl", **LEDGER},
+            "snapshots": {"session": run.session_dir},
         }
     )
 
 
-def arbor_config(spec: AgentSpec, checkout: Path, session: Path, *, stop_at_map: bool = False) -> dict[str, Any]:
-    """Arbor's config for ``spec``: in component mode on the host, the recipe's launch on the serving template pack of
-    ``checkout``, its session ``session``, ending by the spec's deadline, its patches made against its root, the
-    integration notes read every iteration, every measurement by the gate's client when the spec has one, and the
-    host's plan when it gives one; a dossier pass (``stop_at_map``) takes no plan.
+def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, Any]:
+    """Arbor's config for ``run`` of ``spec``: in component mode on the host, the recipe's launch on the serving
+    template pack of ``checkout``, ending by the spec's deadline, its patches made against its root, the integration
+    notes read every iteration, every measurement by the gate's client when the spec has one, and the host's plan
+    when it gives one, which a run that stops at its map does not take.
 
     The cards are numbered from 0, as the sandbox shows them; Arbor never masks them itself in this mode."""
 
@@ -187,8 +184,8 @@ def arbor_config(spec: AgentSpec, checkout: Path, session: Path, *, stop_at_map:
         component["notes"] = spec.knowledge
     if spec.client:
         component["bench_command"] = bench_command(spec.client)
-    if stop_at_map:
-        component["stop_at"] = "map"
+    if run.stop_at:
+        component["stop_at"] = run.stop_at
     elif spec.plan:
         component["plan"] = spec.plan
     return {
@@ -206,7 +203,7 @@ def arbor_config(spec: AgentSpec, checkout: Path, session: Path, *, stop_at_map:
         "bench_script": str(pack / BENCH_SCRIPT),
         "correctness_script": str(pack / CORRECTNESS_SCRIPT),
         "workspace_root": spec.workspace,
-        "session_root": str(session),
+        "session_root": str(checkout / run.session_dir),
         "port": spec.port,
         "gpu_ids": list(range(len(spec.cards))),
         **_operating_point(spec.workload),
@@ -315,41 +312,60 @@ def refusals(config: Mapping[str, Any], env: Mapping[str, str] = os.environ) -> 
     and a plan beside a dossier pass. What only Arbor can check, a plan's directions and the pack's own validation
     among them, it refuses at its start, with exit 2."""
 
-    reasons: list[str] = []
     component = config.get("component")
     component = component if isinstance(component, Mapping) else {}
+    return [
+        *_block_refusals(component),
+        *_host_refusals(config, env),
+        *_path_refusals(config),
+        *_root_refusals(component.get("root"), Path(str(config.get("workspace_root") or ""))),
+        *_plan_refusals(component.get("plan")),
+    ]
+
+
+def _block_refusals(component: Mapping[str, Any]) -> list[str]:
+    reasons = []
     unknown = sorted(set(component) - set(BLOCK_KEYS))
     if unknown:
         reasons.append(f"the component block has keys Arbor does not: {', '.join(unknown)}")
-    if not config.get("session_root"):
-        reasons.append("no session_root: the snapshots, the heartbeat and the exit file are written there")
     deadline = component.get("deadline")
     if not isinstance(deadline, int) or isinstance(deadline, bool) or deadline <= 0:
         reasons.append(f"no deadline: component.deadline is {deadline!r}")
+    if component.get("plan") is not None and component.get("stop_at") is not None:
+        reasons.append("a dossier pass (component.stop_at) takes no plan")
+    return reasons
+
+
+def _host_refusals(config: Mapping[str, Any], env: Mapping[str, str]) -> list[str]:
+    reasons = []
+    if not config.get("session_root"):
+        reasons.append("no session_root: the snapshots, the heartbeat and the exit file are written there")
     if config.get("docker_container") != "@host":
         reasons.append(f"docker_container is {config.get('docker_container')!r}, not @host")
     if env.get("ARBOR_ROLL") == "1":
         reasons.append("ARBOR_ROLL=1 is set: a component's clock is its host's")
-    workspace = Path(str(config.get("workspace_root") or ""))
-    if not config.get("workspace_root") or not workspace.is_dir():
+    return reasons
+
+
+def _path_refusals(config: Mapping[str, Any]) -> list[str]:
+    reasons = []
+    if not config.get("workspace_root") or not Path(str(config["workspace_root"])).is_dir():
         reasons.append(f"the workspace {config.get('workspace_root')!r} is not a directory")
-    root = component.get("root")
-    if not isinstance(root, str) or not _SHA.fullmatch(root):
-        reasons.append(f"component.root {root!r} is not a commit sha")
-    elif workspace.is_dir() and not _has_commit(workspace, root):
-        reasons.append(f"component.root {root} is not a commit of the workspace {workspace}")
     for key in ("bench_script", "correctness_script"):
         if not Path(str(config.get(key) or "")).is_file():
             reasons.append(f"{key} {config.get(key)!r} is not a file")
-    scripts = Path(str(config.get("bench_script") or "")).parent.parent
-    if not (scripts / "pack.yaml").is_file():
-        reasons.append(f"the pack {config.get('pack')!r} has no pack.yaml at {scripts}")
-    plan = component.get("plan")
-    if plan is not None and component.get("stop_at") is not None:
-        reasons.append("a dossier pass (component.stop_at) takes no plan")
-    if plan is not None:
-        reasons += _plan_refusals(plan)
+    pack = Path(str(config.get("bench_script") or "")).parent.parent
+    if not (pack / "pack.yaml").is_file():
+        reasons.append(f"the pack {config.get('pack')!r} has no pack.yaml at {pack}")
     return reasons
+
+
+def _root_refusals(root: object, workspace: Path) -> list[str]:
+    if not isinstance(root, str) or not _SHA.fullmatch(root):
+        return [f"component.root {root!r} is not a commit sha"]
+    if workspace.is_dir() and not _has_commit(workspace, root):
+        return [f"component.root {root} is not a commit of the workspace {workspace}"]
+    return []
 
 
 def _has_commit(workspace: Path, sha: str) -> bool:
@@ -363,9 +379,11 @@ def _has_commit(workspace: Path, sha: str) -> bool:
 
 
 def _plan_refusals(plan: object) -> list[str]:
-    """What is wrong with the plan file ``plan`` as far as reading it goes: a JSON list of directions or
+    """What is wrong with the plan file ``plan``, if any, as far as reading it goes: a JSON list of directions or
     ``{"directions": [...]}``, not empty, at an absolute path."""
 
+    if plan is None:
+        return []
     if not isinstance(plan, str) or not Path(plan).is_absolute():
         return [f"component.plan {plan!r} is not an absolute path"]
     try:
@@ -424,21 +442,20 @@ async def split_directions(checkout: Path, map_file: Path, shares: int, out: Pat
 
 __all__ = [
     "BLOCK_KEYS",
-    "CONFIG_FILE",
-    "DOSSIER_CONFIG_FILE",
-    "DOSSIER_SESSION_DIR",
+    "BRANCH_RUN",
+    "DOSSIER_PASS",
     "EXIT_REFUSED",
     "INSTALL",
     "MAP_FILE",
     "MAPPED",
     "MARKERS",
-    "SESSION_DIR",
+    "ArborCheckout",
     "ArborRefused",
+    "ArborRun",
     "SplitFailed",
     "arbor_config",
     "arbor_manifest",
     "bench_command",
-    "dossier_manifest",
     "is_arbor",
     "mapped",
     "refusals",
