@@ -122,6 +122,9 @@ class AgentSessions:
         index = self._taken.setdefault(branch, len(self._taken))
         port = self.spec.port + index * PORTS_PER_AGENT
         client = "" if self.client is None else self.client.command(port, place.workspace / AGENT_DIR / BENCH_DIR)
+        # The scheduling's seam for Arbor (#157): once the dossier pass mapped the session's directions and the map was
+        # split (arbor_adapter.dossier_manifest, mapped, split_directions), a branch dealt a share runs with ``plan``
+        # set to its file.
         spec = replace(self.spec, port=port, client=client)
         source = place.worktree.path / PurePosixPath(COMPONENT_LAYOUTS[component].upstream_prefix).parent
         onboard = cli_onboard(self.command, self.env, branch, place.blackboard)

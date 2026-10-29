@@ -210,9 +210,11 @@ class LedgerSource:
 
 
 #: Where Arbor's component mode writes its snapshots in its session, unless its config's ``component.outbox`` renames
-#: it, and the file it writes why it ended to, before an exit 0 only.
+#: it, the file it writes why it ended to, before an exit 0 only, and the one it writes why it refused its config to,
+#: before an exit 2.
 DEFAULT_OUTBOX = "keeps"
 EXIT_FILE = "component_exit.json"
+REFUSED_FILE = "component_refused.json"
 
 
 @dataclass(frozen=True)
@@ -293,6 +295,11 @@ class AgentManifest:
         """The exit file of an agent run as a component, relative to its checkout."""
         return str(PurePosixPath(self._session()) / EXIT_FILE)
 
+    @property
+    def snapshots_refused(self) -> str:
+        """The refusal file of an agent run as a component, relative to its checkout."""
+        return str(PurePosixPath(self._session()) / REFUSED_FILE)
+
     def _session(self) -> str:
         if self.snapshots is None:
             raise ManifestError("the agent writes no snapshots")
@@ -360,5 +367,6 @@ __all__ = [
     "SnapshotSource",
     "DEFAULT_OUTBOX",
     "EXIT_FILE",
+    "REFUSED_FILE",
     "read_field",
 ]
