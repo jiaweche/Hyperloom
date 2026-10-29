@@ -504,9 +504,11 @@ async def _rig(
     spend: type[AgentSpend] = AgentSpend,
     start_seconds: float = 5.0,
     aiter: Path | None = None,
+    source: Path | None = None,
 ) -> Rig:
     """A session of the agent on :data:`BRANCH`, opened at the root, or at ``start`` committed onto it the way PRELUDE
-    replays a Recipe KB champion."""
+    replays a Recipe KB champion; the agent's source is ``source``, or a repository holding :data:`AGENT` and
+    :data:`COMPONENT_AGENT`."""
 
     rig = await branch_rig(tmp_path, ROOT, BRANCH)
     start_commit = rig.root if start is None else await rig.repo.commit(BRANCH, rig.root, start, "champion")
@@ -549,7 +551,8 @@ async def _rig(
     if aiter is not None:
         setup = replace(setup, aiter_configs=aiter)
     place = BranchPlace(worktree, rig.blackboard, tmp_path / BRANCH / "session")
-    start = SessionStart(BRANCH, start_commit, 1, BranchTask(agent=str(_agent_repo(tmp_path)), deadline=deadline))
+    agent_source = str(source or _agent_repo(tmp_path))
+    start = SessionStart(BRANCH, start_commit, 1, BranchTask(agent=agent_source, deadline=deadline))
 
     def restart() -> AutonomousSession:
         return AutonomousSession(start, setup, place)

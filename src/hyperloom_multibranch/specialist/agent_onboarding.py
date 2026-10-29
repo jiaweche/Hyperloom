@@ -15,7 +15,10 @@ refused for a reason the next attempt would meet again (:class:`ModelRefused`).
 An agent that writes a snapshot of each keep runs as a component of MB, in the mode Arbor's README describes: MB sets
 that mode, its host, the absolute deadline and the commit its keeps are read against in its config itself
 (:func:`component_config`), whatever the manifest says of them, and, when the session's root was profiled, the file in
-its session that holds the root's op shares (:data:`PROFILE_FILE`).
+its session that holds the root's op shares (:data:`PROFILE_FILE`). Arbor itself is not onboarded by the model: its
+checkout says what it is, and :mod:`arbor_adapter` writes its manifest and config from the spec, which MB then sets
+as it sets any agent's in that mode. A config refused then, by the adapter's check or by Arbor as it starts, is the
+last attempt (:class:`ConfigRefused`): another would write the same config.
 
 The agent runs commands, not containers: a ``docker`` on its ``PATH`` (:data:`DOCKER_SHIM`) runs ``docker exec`` and
 ``docker cp`` in place, for an agent written to drive a container, and refuses everything else.
@@ -36,6 +39,13 @@ from typing import Protocol
 
 from hyperloom_multibranch.contracts.blackboard.records import OpShares
 from hyperloom_multibranch.specialist.agent_manifest import AgentManifest, ManifestError
+from hyperloom_multibranch.specialist.arbor_adapter import (
+    EXIT_REFUSED,
+    ArborRefused,
+    arbor_manifest,
+    is_arbor,
+    refused_reasons,
+)
 from hyperloom_multibranch.specialist.runtime import PreflightFailed
 
 ATTEMPTS = 3
@@ -104,7 +114,9 @@ class AgentSpec:
     the session has none to give), ``baseline``, what the gate measured of the metric on the session's root (``None``
     before it did), ``knowledge``, the notes on the integration head the agent reads each iteration, and, for an agent
     run as a component, ``deadline``, the clock time it ends by, ``root``, the commit of ``workspace`` its patches
-    are made against, and ``root_shares``, the op shares of the session root's profile (``None`` when it has none)."""
+    are made against, and ``root_shares``, the op shares of the session root's profile (``None`` when it has none).
+    Arbor (:mod:`arbor_adapter`) may also be given ``plan``, the file of the branch's share of the session's
+    directions, which the onboarding model is not told."""
 
     model: str
     framework: str
@@ -125,6 +137,7 @@ class AgentSpec:
     deadline: float = 0.0
     root: str = ""
     root_shares: OpShares | None = None
+    plan: str | None = None
 
     def to_document(self) -> dict[str, object]:
         return {
@@ -213,6 +226,11 @@ class ModelRefused(AttemptFailed):
     or a CLI too old for the model."""
 
 
+class ConfigRefused(AttemptFailed):
+    """An attempt whose config was refused when no model wrote it: another attempt would write the same, so it is the
+    last."""
+
+
 async def make_ready(source: str, spec: AgentSpec, agent_dir: Path, setup: OnboardingSetup) -> ReadyAgent:
     """Fetch ``source`` into ``agent_dir``, onboard it for ``spec`` and start it; raise
     :class:`~hyperloom_multibranch.specialist.runtime.PreflightFailed` with one line per failed attempt."""
@@ -221,7 +239,7 @@ async def make_ready(source: str, spec: AgentSpec, agent_dir: Path, setup: Onboa
     for attempt in range(1, setup.attempts + 1):
         try:
             return await _attempt(source, spec, agent_dir, setup, tuple(failures))
-        except ModelRefused as error:
+        except (ModelRefused, ConfigRefused) as error:
             raise PreflightFailed([*failures, f"attempt {attempt}: {error}"]) from error
         except (AttemptFailed, OSError) as error:
             failures.append(f"attempt {attempt}: {error}")
@@ -235,11 +253,18 @@ async def _attempt(
 ) -> ReadyAgent:
     checkout = agent_dir / SOURCE_DIR
     commit = await _fetch(source, checkout)
-    answer = await setup.onboard(checkout, onboarding_prompt(spec, source, checkout, commit, failures))
-    try:
-        manifest = AgentManifest.read(_json_object(answer))
-    except (ManifestError, ValueError) as error:
-        raise AttemptFailed(f"the manifest: {error}") from error
+    adapted = is_arbor(checkout)
+    if adapted:
+        try:
+            manifest = await asyncio.to_thread(arbor_manifest, spec, source, commit, checkout)
+        except ArborRefused as error:
+            raise ConfigRefused(f"Arbor would refuse the config written for it: {error}") from error
+    else:
+        answer = await setup.onboard(checkout, onboarding_prompt(spec, source, checkout, commit, failures))
+        try:
+            manifest = AgentManifest.read(_json_object(answer))
+        except (ManifestError, ValueError) as error:
+            raise AttemptFailed(f"the manifest: {error}") from error
     if manifest.snapshots is not None:
         profile = root_profile(spec.root_shares, checkout / manifest.snapshots.session)
         manifest = replace(manifest, config=component_config(manifest.config, spec, profile))
@@ -250,7 +275,7 @@ async def _attempt(
     process = await setup.sandbox.start(manifest.launch, checkout, env)
     started = False
     try:
-        await _started(process, manifest, checkout, setup)
+        await _started(process, manifest, checkout, setup, final=adapted)
         started = True
     finally:
         if not started:
@@ -302,15 +327,22 @@ def root_profile(shares: OpShares | None, session: Path) -> Path | None:
     return profile
 
 
-async def _started(process: AgentProcess, manifest: AgentManifest, checkout: Path, setup: OnboardingSetup) -> None:
+async def _started(
+    process: AgentProcess, manifest: AgentManifest, checkout: Path, setup: OnboardingSetup, *, final: bool = False
+) -> None:
     """Return once the agent wrote its keep file or stayed up :attr:`OnboardingSetup.start_seconds`; raise
-    :class:`AttemptFailed` when it exited first."""
+    :class:`AttemptFailed` when it exited first, saying why from its refusal file when it ran as a component and
+    refused its config, and :class:`ConfigRefused` then when the config is ``final``."""
 
     until = setup.clock() + setup.start_seconds
     keep = None if manifest.keep is None else checkout / manifest.keep.path
     while setup.clock() < until and not (keep is not None and keep.exists()):
         if process.returncode is not None:
-            raise AttemptFailed(f"`{manifest.launch}` exited {process.returncode}: {tail(await process.output())}")
+            said = tail(await process.output())
+            if process.returncode == EXIT_REFUSED and manifest.snapshots is not None:
+                why = refused_reasons(checkout / manifest.snapshots_refused) or said
+                raise (ConfigRefused if final else AttemptFailed)(f"`{manifest.launch}` refused its config: {why}")
+            raise AttemptFailed(f"`{manifest.launch}` exited {process.returncode}: {said}")
         await setup.sleep(setup.poll_seconds)
 
 
@@ -478,6 +510,7 @@ __all__ = [
     "AgentSandbox",
     "AgentSpec",
     "AttemptFailed",
+    "ConfigRefused",
     "CommandResult",
     "ModelRefused",
     "OnboardingSetup",
