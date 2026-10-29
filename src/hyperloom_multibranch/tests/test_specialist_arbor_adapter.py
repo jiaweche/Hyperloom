@@ -41,7 +41,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
 from hyperloom_multibranch.specialist.autonomous_session import AGENT_DIR, MANIFEST_FILE, START_TABLES_FILE
 from hyperloom_multibranch.specialist.gate_client import GateClient
 from hyperloom_multibranch.specialist.judging import NOTICE
-from hyperloom_multibranch.specialist.runtime import PreflightFailed, SessionCrashed, SessionFinished
+from hyperloom_multibranch.specialist.runtime import PreflightFailed, SessionCrashed, SessionFinished, SessionRefused
 from hyperloom_multibranch.tests.test_specialist_agent_onboarding import Onboarder, Process, Sandbox, _setup
 from hyperloom_multibranch.tests.test_specialist_autonomous_session import (
     BRANCH,
@@ -493,6 +493,22 @@ async def test_an_arbor_restarted_after_a_crash_is_resumed_by_its_stored_manifes
     assert rig.sandbox.started == [LAUNCH, LAUNCH] and rig.sandbox.prompts == []
     assert config.read_text() == written
     assert any(note == f"{NOTICE} the agent resumed with `{LAUNCH}`" for note in await rig.notices())
+
+
+async def test_an_arbor_that_refuses_its_config_ends_the_branch_for_good_with_its_reasons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(arbor_adapter, "INSTALL", ())
+    rig = await _rig(tmp_path, source=_arbor_repo(tmp_path, Component(tail=0.6), REASONS), start_seconds=0.2)
+
+    await rig.session.preflight()
+    with pytest.raises(SessionRefused) as refused:
+        await asyncio.wait_for(rig.session.run(), 10)
+    await rig.session.stop()
+
+    assert str(refused.value) == f"the agent refused its config: {'; '.join(REASONS)}"
+    assert isinstance(refused.value, SessionFinished) and not isinstance(refused.value, SessionCrashed)
+    assert (await rig.notices())[-1] == f"{NOTICE} {refused.value}"
 
 
 def test_a_refusal_file_s_reasons_are_read_in_order_and_none_is_empty(tmp_path: Path) -> None:

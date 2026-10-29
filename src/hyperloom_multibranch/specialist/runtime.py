@@ -91,6 +91,11 @@ class SessionFinished(RuntimeError):
     change it kept settled."""
 
 
+class SessionRefused(SessionFinished):
+    """A run of a third-party agent that refused the config it was given, as Arbor's exit 2 says: started again, it
+    would refuse it again, so it ends its specialist as a finished run does, with why."""
+
+
 class PreflightFailed(RuntimeError):
     """A branch's specialist could not be made ready to run; ``reasons`` says why, one line per attempt."""
 
@@ -489,6 +494,7 @@ __all__ = [
     "SessionFinished",
     "SessionIdle",
     "SessionFactory",
+    "SessionRefused",
     "SessionStart",
     "SpecialistRuntime",
     "restart_notice",
