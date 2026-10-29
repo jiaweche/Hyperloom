@@ -51,7 +51,13 @@ from hyperloom_multibranch.specialist.autonomous_session import (
 from hyperloom_multibranch.contracts.llm_prices import TokenCounts
 from hyperloom_multibranch.specialist.agent_spend import AgentSpend, transcript_dir
 from hyperloom_multibranch.specialist.judging import NOTICE
-from hyperloom_multibranch.specialist.runtime import PreflightFailed, SessionCrashed, SessionFinished, SessionStart
+from hyperloom_multibranch.specialist.runtime import (
+    PreflightFailed,
+    SessionCrashed,
+    SessionFinished,
+    SessionRefused,
+    SessionStart,
+)
 from hyperloom_multibranch.tests.branch_rig import branch_rig
 from hyperloom_multibranch.toolbox.kernel_artifacts import KernelVariables
 
@@ -1444,13 +1450,17 @@ async def test_an_agent_in_component_mode_that_crashed_is_resumed_as_any_crash(t
     assert not crashed.value.lost
 
 
-async def test_an_agent_in_component_mode_that_refused_its_config_says_why(tmp_path: Path) -> None:
+async def test_an_agent_in_component_mode_that_refused_its_config_says_why_and_is_not_restarted(
+    tmp_path: Path,
+) -> None:
     rig = await _rig(tmp_path, Component(keeps=(), exit=2, tail=0.6), start_seconds=0.2)
 
     await rig.session.preflight()
-    with pytest.raises(SessionCrashed, match="refused its config.*docker_container must be @host"):
+    with pytest.raises(SessionRefused, match="refused its config.*docker_container must be @host"):
         await asyncio.wait_for(rig.session.run(), 10)
     await rig.session.stop()
+
+    assert issubclass(SessionRefused, SessionFinished) and not issubclass(SessionRefused, SessionCrashed)
 
 
 async def test_an_agent_in_component_mode_stopped_by_mb_records_its_sigterm_exit(tmp_path: Path) -> None:

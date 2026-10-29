@@ -27,7 +27,8 @@ and the agent is given until its last import can still be judged in EXPLORE as i
 a snapshot of each keep (Arbor's component mode) runs to that time as its absolute deadline, against the commit its
 workspace starts on, and has its newest snapshot read whole, chained back to that commit, its launch only as it
 differs from the one MB started it with (:func:`read_snapshot`); a variable the measurement sets itself is left out of
-every keep and noted once; why it ended, from its exit file, goes into the branch log. An agent
+every keep and noted once; why it ended, from its exit file, goes into the branch log; one that refuses its config
+(exit 2) ends the branch with why, from its refusal file, and is never started again. An agent
 that exits 0 finishes the run once what it kept last settled; one that exits otherwise is a crash the runtime restarts
 it from. A session never ends idle: what the agent keeps, or does not, is its own business, bounded by the session's
 stops. A watch beside the run's poll makes the run a lost session when the running agent writes nothing (no output,
@@ -91,8 +92,15 @@ from hyperloom_multibranch.specialist.agent_onboarding import (
 )
 from hyperloom_multibranch.specialist.agent_session import BranchPlace
 from hyperloom_multibranch.specialist.agent_spend import AgentSpend, newest_write
+from hyperloom_multibranch.specialist.arbor_adapter import refused_reasons
 from hyperloom_multibranch.specialist.judging import NOTICE
-from hyperloom_multibranch.specialist.runtime import PreflightFailed, SessionCrashed, SessionFinished, SessionStart
+from hyperloom_multibranch.specialist.runtime import (
+    PreflightFailed,
+    SessionCrashed,
+    SessionFinished,
+    SessionRefused,
+    SessionStart,
+)
 from hyperloom_multibranch.specialist.start_tables import (
     StartTable,
     StartTableError,
@@ -133,7 +141,7 @@ START_TABLES_FILE = "agent-start-tables.json"
 SETTLE_SECONDS = 120.0
 #: The toolbox's refusal of a delta it cannot compile, among them a launch the measurement's launcher overrides.
 LAUNCH_REFUSED = "delta_not_applicable"
-#: The exit code of an agent run as a component that refused its config, saying why on stderr.
+#: The exit code of an agent run as a component that refused its config, saying why on stderr and in its refusal file.
 REFUSED_CONFIG = 2
 #: The deadline of an agent run as a component when EXPLORE has none, which it refuses to run without; MB stops it
 #: long before.
@@ -492,10 +500,14 @@ class AutonomousSession:
         return BranchLease(**{**document, "gpu_ids": tuple(document["gpu_ids"]), "root": Path(document["root"])})
 
     async def _ended(self, manifest: AgentManifest, process: AgentProcess, watch: KeepWatch) -> None:
-        """End the run of an agent that exited: a crash when it failed, else once what it kept last settled."""
+        """End the run of an agent that exited: for good when it refused its config, a crash when it failed, else once
+        what it kept last settled."""
 
         if process.returncode == REFUSED_CONFIG and manifest.snapshots is not None:
-            raise SessionCrashed(f"the agent refused its config: {tail(await process.output())}")
+            why = refused_reasons(self._agent_dir / SOURCE_DIR / manifest.snapshots_refused)
+            refused = f"the agent refused its config: {why or tail(await process.output())}"
+            await self._note(refused)
+            raise SessionRefused(refused)
         if process.returncode != 0:
             raise SessionCrashed(f"the agent exited {process.returncode}: {tail(await process.output())}")
         said = self._exit_reason(manifest) if manifest.snapshots is not None else ""
