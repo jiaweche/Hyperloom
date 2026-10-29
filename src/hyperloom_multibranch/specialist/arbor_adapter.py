@@ -70,7 +70,7 @@ EXIT_REFUSED = 2
 #: The exit reason of a dossier pass that set its map, and the map's file in its session.
 MAPPED = "mapped"
 MAP_FILE = "directions.json"
-#: The keys of Arbor's component block (arbor/component.py at 15a46e6); another is refused.
+#: The keys of Arbor's component block; another is refused.
 BLOCK_KEYS = (
     "host",
     "deadline",
