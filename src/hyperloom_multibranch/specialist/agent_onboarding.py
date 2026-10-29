@@ -336,13 +336,21 @@ def root_profile(shares: OpShares | None, session: Path) -> Path | None:
 async def _started(
     process: AgentProcess, manifest: AgentManifest, checkout: Path, setup: OnboardingSetup, *, final: bool = False
 ) -> None:
-    """Return once the agent wrote its keep file or stayed up :attr:`OnboardingSetup.start_seconds`; raise
-    :class:`AttemptFailed` when it exited first, saying why from its refusal file when it ran as a component and
-    refused its config, and :class:`ConfigRefused` then when the config is ``final``."""
+    """Return once the agent wrote its keep file or stayed up :attr:`OnboardingSetup.start_seconds`, or, run as a
+    component, ended of itself with its exit file written, as one started with too little time left does: its run
+    finishes with the exit file's reason. Raise :class:`AttemptFailed` when it exited otherwise first, saying why from
+    its refusal file when it ran as a component and refused its config, and :class:`ConfigRefused` then when the
+    config is ``final``."""
 
     until = setup.clock() + setup.start_seconds
     keep = None if manifest.keep is None else checkout / manifest.keep.path
     while setup.clock() < until and not (keep is not None and keep.exists()):
+        if (
+            process.returncode == 0
+            and manifest.snapshots is not None
+            and (checkout / manifest.snapshots_exit).is_file()
+        ):
+            return
         if process.returncode is not None:
             said = tail(await process.output())
             if process.returncode == EXIT_REFUSED and manifest.snapshots is not None:

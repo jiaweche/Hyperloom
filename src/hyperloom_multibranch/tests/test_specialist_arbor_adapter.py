@@ -524,6 +524,21 @@ async def test_arbor_starts_with_the_start_s_kernel_tables_and_a_keep_that_keeps
     assert request.delta.config == ConfigDelta() and "+max_num_seqs = 256" in rig.patch(request)
 
 
+async def test_an_arbor_started_with_too_little_time_ends_its_branch_as_finished_after_one_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(arbor_adapter, "INSTALL", ())
+    agent = Component(keeps=(), tail=0.0, reason="deadline")
+    rig = await _rig(tmp_path, source=_arbor_repo(tmp_path, agent), start_seconds=5.0)
+
+    await asyncio.wait_for(rig.session.preflight(), 20)
+    with pytest.raises(SessionFinished, match="the agent finished its run: deadline"):
+        await asyncio.wait_for(rig.session.run(), 10)
+
+    assert rig.sandbox.started == [LAUNCH]
+    assert (await rig.notices())[-1] == f"{NOTICE} the agent finished its run: deadline"
+
+
 async def test_an_arbor_restarted_after_a_crash_is_resumed_by_its_stored_manifest_without_onboarding_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
