@@ -37,6 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+from hyperloom.common.workload_defaults import DEFAULT_EP
 from hyperloom_multibranch.contracts.blackboard.records import OpShares
 from hyperloom_multibranch.specialist.agent_manifest import AgentManifest, ManifestError
 from hyperloom_multibranch.specialist.arbor_adapter import (
@@ -117,8 +118,8 @@ class AgentSpec:
     before it did), ``knowledge``, the notes on the integration head the agent reads each iteration, and, for an agent
     run as a component, ``deadline``, the clock time it ends by, ``root``, the commit of ``workspace`` its patches
     are made against, and ``root_shares``, the op shares of the session root's profile (``None`` when it has none).
-    Arbor (:mod:`arbor_adapter`) may also be given ``plan``, the file of the branch's share of the session's
-    directions, which the onboarding model is not told."""
+    Arbor (:mod:`arbor_adapter`) is also given ``ep``, the expert-parallel size the workload is served at, and may be
+    given ``plan``, the file of the branch's share of the session's directions; the onboarding model is told neither."""
 
     model: str
     framework: str
@@ -140,6 +141,7 @@ class AgentSpec:
     root: str = ""
     root_shares: OpShares | None = None
     plan: str | None = None
+    ep: int = DEFAULT_EP
 
     def to_document(self) -> dict[str, object]:
         return {

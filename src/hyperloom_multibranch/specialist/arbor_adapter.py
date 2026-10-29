@@ -35,6 +35,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from hyperloom.inference_optimizer.framework_registry import EXPERT_PARALLEL_FLAGS
+from hyperloom.inference_optimizer.grid_server_args import merge_server_args, tokenize_server_args_preserving_json
 from hyperloom_multibranch.specialist.agent_manifest import EXIT_FILE, AgentManifest
 
 if TYPE_CHECKING:
@@ -51,6 +53,9 @@ CORRECTNESS_SCRIPT = "validator/correctness.sh"
 #: where Arbor finds its packs from it.
 MB_DIR = "hyperloom-mb"
 OUTBOX = "keeps"
+#: Arbor gives vLLM its TP itself and SGLang none, which reads it from these flags only.
+SGLANG = "sglang"
+SGLANG_TP_FLAGS = ("--tp-size", "--tp", "--tensor-parallel-size")
 #: The interpreter Arbor runs under, the sandbox's.
 PYTHON = "python3"
 #: What Arbor needs beyond the image (its docs/getting-started.md, and the third-party modules arbor/ imports outside
@@ -198,7 +203,7 @@ def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, An
         "model_path": spec.model,
         "model_name": _client_value(spec.client, MODEL) or spec.model,
         "tp": spec.tp,
-        "server_flags": spec.server_args,
+        "server_flags": server_flags(spec),
         "server_env": dict(spec.envs),
         "bench_script": str(pack / BENCH_SCRIPT),
         "correctness_script": str(pack / CORRECTNESS_SCRIPT),
@@ -209,6 +214,27 @@ def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, An
         **_operating_point(spec.workload),
         "component": component,
     }
+
+
+def server_flags(spec: AgentSpec) -> str:
+    """The recipe's server arguments as Arbor launches them: on SGLang, with the workload's TP size and its
+    expert-parallel size, each unless the arguments set it; the expert-parallel size only when it divides the TP, as
+    MB's own launch has it."""
+
+    if spec.framework != SGLANG:
+        return spec.server_args
+    named = _flag_names(spec.server_args)
+    added = [] if named & set(SGLANG_TP_FLAGS) else [f"{SGLANG_TP_FLAGS[0]} {spec.tp}"]
+    flag, aliases, _ = EXPERT_PARALLEL_FLAGS[SGLANG]
+    if spec.ep > 1 and spec.tp % spec.ep == 0 and not named & set(aliases):
+        added.append(f"{flag} {spec.ep}")
+    return merge_server_args(spec.server_args, *added)
+
+
+def _flag_names(args: str) -> set[str]:
+    split = tokenize_server_args_preserving_json(args)
+    words = args.split() if split is None else split[1]
+    return {word.partition("=")[0] for word in words if word.startswith("-")}
 
 
 def _operating_point(workload: Mapping[str, object]) -> dict[str, int]:
@@ -460,5 +486,6 @@ __all__ = [
     "mapped",
     "refusals",
     "refused_reasons",
+    "server_flags",
     "split_directions",
 ]

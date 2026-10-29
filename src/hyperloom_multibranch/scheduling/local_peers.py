@@ -776,6 +776,7 @@ def _agent_spec(workload: Workload) -> AgentSpec:
         cards=(),
         seconds=0.0,
         port=AGENT_PORT,
+        ep=workload.ep,
     )
 
 

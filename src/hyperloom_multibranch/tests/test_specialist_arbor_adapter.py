@@ -217,6 +217,58 @@ def test_a_spec_with_no_client_runs_the_pack_s_bench_on_a_server_named_by_its_mo
     assert "bench_command" not in config["component"] and "notes" not in config["component"]
 
 
+#: A recipe's own SGLang arguments for a GLM-like MoE model, served at TP4 and EP4.
+GLM_ARGS = "--mem-fraction-static 0.85 --chunked-prefill-size 16384"
+
+
+@pytest.mark.parametrize(
+    ("args", "tp", "ep", "flags"),
+    [
+        ("", 2, 1, "--tp-size 2"),
+        (GLM_ARGS, 4, 4, f"{GLM_ARGS} --tp-size 4 --ep-size 4"),
+        ("", 4, 3, "--tp-size 4"),
+    ],
+    ids=["tp2", "glm-tp4-ep4", "ep-not-dividing-tp"],
+)
+def test_an_sglang_server_is_launched_at_the_workload_s_tp_and_ep(
+    tmp_path: Path, args: str, tp: int, ep: int, flags: str
+) -> None:
+    spec = _spec(tmp_path, framework="sglang", server_args=args, tp=tp, ep=ep)
+
+    config = arbor_config(spec, tmp_path / "checkout", BRANCH_RUN)
+
+    assert (config["server_flags"], config["tp"]) == (flags, tp)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        "--tp 4",
+        "--tp-size 4",
+        "--tensor-parallel-size 4",
+        "--tp=4",
+        "--tp-size=4",
+        "--tensor-parallel-size=4",
+        "--tp-size 4 --ep 4",
+        "--tp-size 4 --ep-size=4",
+        "--tp-size 4 --expert-parallel-size 4",
+    ],
+)
+def test_an_sglang_size_the_recipe_sets_in_any_spelling_is_not_set_again(tmp_path: Path, args: str) -> None:
+    ep = 4 if "--e" in args else 1
+    spec = _spec(tmp_path, framework="sglang", server_args=args, tp=4, ep=ep)
+
+    assert arbor_config(spec, tmp_path / "checkout", BRANCH_RUN)["server_flags"] == args
+
+
+def test_a_vllm_server_takes_the_tp_from_arbor_and_its_arguments_as_the_recipe_gives_them(tmp_path: Path) -> None:
+    spec = _spec(tmp_path, server_args="", tp=4, ep=4)
+
+    config = arbor_config(spec, tmp_path / "checkout", BRANCH_RUN)
+
+    assert (config["framework"], config["server_flags"], config["tp"]) == ("vllm", "", 4)
+
+
 def test_the_gate_s_client_is_arbor_s_bench_command_with_only_its_port_and_result_dir_left_to_fill() -> None:
     client = CLIENT.command(PORT, Path("/mb/a1/agent/mb-bench"))
 
@@ -571,3 +623,23 @@ async def test_a_map_is_split_by_a_real_arbor_into_shares_each_a_plan_it_accepts
     assert set().union(*dealt) == {"m-attn", "m-moe", "m-allreduce"} and not dealt[0] & dealt[1]
     with pytest.raises(SplitFailed, match="exited 1"):
         await split_directions(checkout, map_file, 4, tmp_path / "four")
+
+
+@pytest.mark.skipif(not ARBOR_CHECKOUT, reason="HYPERLOOM_TEST_ARBOR_CHECKOUT names no Arbor checkout")
+def test_a_real_arbor_launches_sglang_at_the_workload_s_tp_and_ep(tmp_path: Path) -> None:
+    spec = _spec(tmp_path, framework="sglang", server_args=GLM_ARGS, tp=4, ep=4)
+    config = arbor_config(spec, Path(ARBOR_CHECKOUT), BRANCH_RUN)
+    serve = "import json, sys; from arbor import frameworks; c = json.load(sys.stdin); print(frameworks.get(c).serve_cmd(c, c['server_flags']))"
+
+    done = subprocess.run(
+        ["python3", "-c", serve],
+        cwd=ARBOR_CHECKOUT,
+        input=json.dumps(config),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    words = shlex.split(done.stdout)
+    assert words[:3] == ["python3", "-m", "sglang.launch_server"]
+    assert (words[words.index("--tp-size") + 1], words[words.index("--ep-size") + 1]) == ("4", "4")
