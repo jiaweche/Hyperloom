@@ -168,6 +168,13 @@ def test_the_workload_reaches_the_renderer_as_hyperloom_optimize_exports_it(monk
     }
 
 
+def test_an_mi350x_is_measured_on_mi355x_scripts_and_named_as_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HL_MODEL_BASE", raising=False)
+    environment = workload_environment(replace(WORKLOAD, gpu_type="mi350x"))
+
+    assert (environment["GPU_TYPE"], environment["TARGET_GPU_TYPE"]) == ("mi355x", "mi350x")
+
+
 def test_an_agentx_workload_reaches_the_renderer_and_the_prelude_child_as_agentx_without_sequence_lengths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

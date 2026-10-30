@@ -186,7 +186,7 @@ def test_an_unknown_gpu_type_is_refused_naming_the_types_a_session_runs_on(capsy
         cli.main(["run", *WORKLOAD_ARGS, "--gpu-type", "MI325X"])
 
     assert exc.value.code == cli.EXIT_USAGE
-    assert "invalid choice: 'mi325x' (choose from 'mi300x', 'mi355x')" in capsys.readouterr().err
+    assert "invalid choice: 'mi325x' (choose from 'mi300x', 'mi350x', 'mi355x')" in capsys.readouterr().err
 
 
 def test_an_agentx_run_has_no_sequence_lengths_and_is_graded_on_p50_interactivity_at_its_conc_alone() -> None:

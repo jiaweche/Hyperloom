@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, ClassVar, Protocol
 from hyperloom.common.benchmark_config import BENCHMARK_CONFIG_ENV
 from hyperloom.common.llm_config import preferred_agent_backend, provider_model_defaults, resolve_forge_llm_model
 from hyperloom.common.model_paths import resolve_serving_model_path
+from hyperloom.inference_optimizer.gpu_types import gpu_runner_type
 from hyperloom_multibranch.contracts.llm_prices import price_of
 from hyperloom_multibranch.contracts.blackboard import Role, Writer
 from hyperloom_multibranch.contracts.blackboard.interfaces import BranchLogStore, CommitQuery
@@ -221,9 +222,10 @@ def workload_environment(workload: Workload) -> Mapping[str, str]:
     """The workload as the process environment carries it to the main flow's config renderer, which the toolbox
     renders the canonical measurement and every test's points with, and to the kernel tuning the toolbox runs, which
     takes its backend from ``KERNEL_OPT_BACKEND_ORDER``; ``hyperloom optimize`` exports the same, the model resolved to
-    the directory a server loads it from. The command line accepts only GPU types that are their own Magpie runner
-    type, so ``GPU_TYPE`` and ``TARGET_GPU_TYPE`` are the same. An InferenceX workload carries its sequence lengths;
-    an AgentX one carries :data:`AGENTX_ENV` instead, which the PRELUDE child inherits."""
+    the directory a server loads it from. ``GPU_TYPE`` is the Magpie runner type whose scripts measure the board and
+    ``TARGET_GPU_TYPE`` the board, as ``hyperloom optimize`` sets them: the same for mi300x and mi355x, mi355x for an
+    mi350x (``gpu_runner_type``). An InferenceX workload carries its sequence lengths; an AgentX one carries
+    :data:`AGENTX_ENV` instead, which the PRELUDE child inherits."""
 
     shape = workload.inferencex
     workload_specific = {AGENTX_ENV: "1"} if shape is None else {"ISL": str(shape.isl), "OSL": str(shape.osl)}
@@ -233,7 +235,7 @@ def workload_environment(workload: Workload) -> Mapping[str, str]:
         "TP": str(workload.tp),
         **workload_specific,
         "PRECISION": workload.precision,
-        "GPU_TYPE": workload.gpu_type,
+        "GPU_TYPE": gpu_runner_type(workload.gpu_type),
         "TARGET_GPU_TYPE": workload.gpu_type,
         "KERNEL_OPT_BACKEND_ORDER": workload.kernel_optimizer.value,
     }

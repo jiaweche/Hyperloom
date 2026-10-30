@@ -59,6 +59,10 @@ AMD_GPU_BOARDS: dict[str, GpuBoard] = {
         GpuBoard("mi300x", "gfx942", 304, 192.0, 5300.0, _MI300X_PEAKS),
         GpuBoard("mi308x", "gfx942", 304, 192.0, 5300.0, _MI300X_PEAKS),
         GpuBoard("mi325x", "gfx942", 304, 256.0, 6000.0, _MI300X_PEAKS),
+        # MI355X's die at 2.2 GHz rather than 2.4: its peaks scaled by 2.2/2.4, AMD's published 2.3/4.6/9.2 PF.
+        GpuBoard(
+            "mi350x", "gfx950", 256, 288.0, 8000.0, _matrix_peaks(bf16=2306.9, fp8=4613.8, fp4=9227.5, fp32=144.2)
+        ),
         GpuBoard(
             "mi355x", "gfx950", 256, 288.0, 8000.0, _matrix_peaks(bf16=2516.6, fp8=5033.2, fp4=10066.4, fp32=157.3)
         ),
@@ -80,6 +84,8 @@ AMD_GPU_DEVICE_IDS: dict[str, frozenset[str]] = {
     "mi300x": frozenset({"74a1", "74a9", "74b5", "74bd"}),
     "mi308x": frozenset({"74a8"}),
     "mi325x": frozenset({"74a5", "74b9"}),
+    # Read with amd-smi on MI350X nodes (2026-10-31: "AMD Instinct MI350X", VBIOS "MI350 OAM"); its VF id is unlisted.
+    "mi350x": frozenset({"75a0"}),
     "mi355x": frozenset({"75a3", "75b3"}),
     "r9700": frozenset(),
     "radeon8060s": frozenset(),

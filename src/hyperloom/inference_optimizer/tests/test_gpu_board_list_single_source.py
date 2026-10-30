@@ -61,6 +61,7 @@ def test_r9700_has_explicit_gfx1201_dispatch_identity():
     [
         ("Card Series: AMD Instinct MI300X OAM", "mi300x"),
         ("Card Series: AMD Instinct MI325X OAM", "mi325x"),
+        ("Card Series: AMD Instinct MI350X OAM", "mi350x"),
         ("AMD_INSTINCT_MI355X", "mi355x"),
         ("Card Series: AMD Radeon AI PRO R9700", "r9700"),
         ("card series: amd radeon ai pro r9700", "r9700"),
