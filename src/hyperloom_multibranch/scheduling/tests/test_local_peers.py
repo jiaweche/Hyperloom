@@ -80,6 +80,7 @@ from hyperloom_multibranch.scheduling.local_peers import (
     specialist_recall,
     workload_environment,
     workload_rule,
+    _agent_spec,
     _specialist_role,
 )
 from hyperloom_multibranch.scheduling.peers import Peers, PeerSetup, PeersUnavailable
@@ -188,6 +189,11 @@ def test_the_rule_follows_the_workload(tmp_path: Path) -> None:
 def test_the_specialists_are_told_an_agentx_workload_and_no_sequence_lengths() -> None:
     assert _specialist_role(WORKLOAD) == "Llama-3-8B on sglang, bf16, TP 2, ISL 1024, OSL 512, concurrency 16, mi355x"
     assert _specialist_role(AGENTX) == "Llama-3-8B on sglang, bf16, TP 2, AgentX trace replay, concurrency 16, mi355x"
+
+
+def test_the_agents_spec_names_the_pack_the_session_gives_its_arbors_and_none_by_default() -> None:
+    assert _agent_spec(WORKLOAD, "agentx-qwen38-1").pack == "agentx-qwen38-1"
+    assert _agent_spec(WORKLOAD).pack is None
 
 
 @pytest.mark.parametrize("optimizer", list(KernelOptimizer))
@@ -865,7 +871,9 @@ async def test_the_specialists_are_told_of_and_give_back_the_dev_sandboxes_the_s
     layout = SimpleNamespace(logs=tmp_path, source=tmp_path, branch_dir=lambda branch: tmp_path)
     for held in (None, leases):
         wiring = SimpleNamespace(
-            setup=SimpleNamespace(layout=layout, workload=WORKLOAD, references={}, processes=None, agents=()),
+            setup=SimpleNamespace(
+                layout=layout, workload=WORKLOAD, references={}, processes=None, agents=(), agent_pack=""
+            ),
             tokens=None,
             repo=None,
             briefs=SimpleNamespace(text=None),
@@ -938,7 +946,9 @@ def test_the_specialists_source_base_holds_aiter_beside_the_framework_only_from_
         branch_dir=lambda branch: tmp_path / branch,
     )
     wiring = SimpleNamespace(
-        setup=SimpleNamespace(layout=layout, workload=WORKLOAD, references={}, processes=None, agents=()),
+        setup=SimpleNamespace(
+            layout=layout, workload=WORKLOAD, references={}, processes=None, agents=(), agent_pack=""
+        ),
         tokens=None,
         repo=None,
         briefs=SimpleNamespace(text=None),
@@ -1049,7 +1059,9 @@ def test_a_session_on_a_host_that_builds_native_code_lays_out_the_native_tree_an
             logs=tmp_path / "logs", source=tmp_path / source, branch_dir=lambda branch: tmp_path / branch
         )
         wiring = SimpleNamespace(
-            setup=SimpleNamespace(layout=layout, workload=WORKLOAD, references={}, processes=None, agents=()),
+            setup=SimpleNamespace(
+                layout=layout, workload=WORKLOAD, references={}, processes=None, agents=(), agent_pack=""
+            ),
             tokens=None,
             repo=None,
             briefs=SimpleNamespace(text=None),

@@ -328,6 +328,27 @@ def test_the_agent_directions_map_is_kept_by_its_absolute_path(tmp_path: Path, m
     assert _settings("--autonomous-agent", "/agents/arbor").agent_directions == ""
 
 
+def test_the_agent_pack_is_kept_by_name_and_empty_without_one() -> None:
+    assert _settings("--autonomous-agent", "/agents/arbor", "--agent-pack", "agentx-qwen38-1").agent_pack == (
+        "agentx-qwen38-1"
+    )
+    assert _settings("--autonomous-agent", "/agents/arbor").agent_pack == ""
+
+
+@pytest.mark.parametrize(
+    ("extra", "match"),
+    [
+        (["--agent-pack", "agentx-qwen38-1"], "needs an --autonomous-agent"),
+        (["--autonomous-agent", "/agents/arbor", "--agent-pack", "packs/agentx"], "not the name of one pack"),
+        (["--autonomous-agent", "/agents/arbor", "--agent-pack", ".."], "not the name of one pack"),
+        (["--autonomous-agent", "/agents/arbor", "--agent-pack", ""], "not the name of one pack"),
+    ],
+)
+def test_an_agent_pack_without_an_agent_or_not_one_directory_is_a_usage_error(extra: list[str], match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _settings(*extra)
+
+
 @pytest.mark.parametrize(
     ("document", "agent", "match"),
     [

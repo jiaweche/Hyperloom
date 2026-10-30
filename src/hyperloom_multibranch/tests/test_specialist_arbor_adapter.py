@@ -382,6 +382,25 @@ def test_the_branch_s_share_of_the_directions_is_arbor_s_plan_carried_into_its_c
     assert "profile" not in manifest.config["component"]
 
 
+def test_arbor_runs_the_pack_the_spec_names_and_one_its_checkout_lacks_is_refused(tmp_path: Path) -> None:
+    own = {
+        "packs/agentx-qwen38-1/pack.yaml": "name: agentx-qwen38-1\n",
+        "packs/agentx-qwen38-1/validator/bench.sh": "#!/usr/bin/env bash\n",
+        "packs/agentx-qwen38-1/validator/correctness.sh": "#!/usr/bin/env bash\n",
+    }
+    checkout = _write(tmp_path / "checkout", {**CHECKOUT_FILES, **own})
+    spec = _spec(tmp_path)
+
+    config = arbor_config(replace(spec, pack="agentx-qwen38-1"), checkout, BRANCH_RUN)
+    missing = arbor_config(replace(spec, pack="agentx-gone"), checkout, BRANCH_RUN)
+
+    assert config["pack"] == "agentx-qwen38-1"
+    assert config["bench_script"] == str(checkout / "packs" / "agentx-qwen38-1" / "validator" / "bench.sh")
+    assert not [reason for reason in refusals(config, {}) if "pack" in reason or "script" in reason]
+    assert any("agentx-gone" in reason and "pack.yaml" in reason for reason in refusals(missing, {}))
+    assert arbor_config(spec, checkout, BRANCH_RUN)["pack"] == "serving"
+
+
 @pytest.mark.parametrize(
     ("plan", "said"),
     [("shares/share-1.json", "not an absolute path"), ("/nonexistent/share-1.json", "cannot be read")],

@@ -45,7 +45,8 @@ if TYPE_CHECKING:
 #: What makes a checkout Arbor's, run as a component: the mode, the entry point and the host's contract.
 MARKERS = ("arbor/component.py", "arbor/__main__.py", "docs/hosts.md")
 HOST = "hyperloom-mb"
-#: Arbor's serving template, the pack a host runs it on, and its validator scripts in the pack.
+#: Arbor's serving template, the pack a host runs it on unless the spec names another, and the validator scripts every
+#: pack the adapter runs has.
 PACK = "serving"
 BENCH_SCRIPT = "validator/bench.sh"
 CORRECTNESS_SCRIPT = "validator/correctness.sh"
@@ -184,14 +185,15 @@ def arbor_manifest(spec: AgentSpec, checkout: ArborCheckout, run: ArborRun) -> A
 
 
 def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, Any]:
-    """Arbor's config for ``run`` of ``spec``: in component mode on the host, the recipe's launch on the serving
-    template pack of ``checkout``, ending by the spec's deadline, its patches made against its root, the integration
-    notes read every iteration, every measurement by the gate's client when the spec has one, and the host's plan
-    when it gives one, which a run that stops at its map does not take.
+    """Arbor's config for ``run`` of ``spec``: in component mode on the host, the recipe's launch on the pack the spec
+    names in ``checkout`` (the serving template by default), ending by the spec's deadline, its patches made against
+    its root, the integration notes read every iteration, every measurement by the gate's client when the spec has
+    one, and the host's plan when it gives one, which a run that stops at its map does not take.
 
     The cards are numbered from 0, as the sandbox shows them; Arbor never masks them itself in this mode."""
 
-    pack = checkout / "packs" / PACK
+    name = spec.pack or PACK
+    pack = checkout / "packs" / name
     component: dict[str, Any] = {"host": HOST, "deadline": int(spec.deadline), "root": spec.root, "outbox": OUTBOX}
     if spec.knowledge:
         component["notes"] = spec.knowledge
@@ -202,7 +204,7 @@ def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, An
     elif spec.plan:
         component["plan"] = spec.plan
     return {
-        "pack": PACK,
+        "pack": name,
         "identity": f"{HOST} {Path(spec.model).name}",
         "goal": f"{spec.metric} of {spec.model} on {spec.framework} at TP{spec.tp} on {spec.gpu_type}, as MB measures it",
         "mode": "component",

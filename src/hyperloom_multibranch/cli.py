@@ -31,7 +31,9 @@ Each ``--autonomous-agent SOURCE`` opens one branch where EXPLORE starts, after 
 ``--max-branches``, whose specialist runs that third-party agent end to end in a sandbox of its own; a source that
 carries credentials in its URL is a usage error. ``--agent-directions FILE`` names a directions map that is split, after
 PRELUDE, into disjoint shares, one per Arbor agent among them, each its ``component.plan``; a map with no directions, or
-one given with no agent, is a usage error. Each ``--specialist-prompt`` file holds a direction the user wrote
+one given with no agent, is a usage error. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
+serving template; a name that is not one directory, or one given with no agent, is a usage error, and a pack the Arbor
+checkout lacks is refused when the branch starts. Each ``--specialist-prompt`` file holds a direction the user wrote
 for one specialist: its branch opens at PRELUDE's
 root ahead of the opening batch, counted within ``--max-branches``, its specialist sees the text in every launch
 prompt, and the judge neither stops it nor lowers its K for its first judged tests; an empty or unreadable file, or
@@ -381,6 +383,13 @@ def _add_specialist_input_options(run: argparse.ArgumentParser) -> None:
         ),
     )
     run.add_argument(
+        "--agent-pack",
+        dest="agent_pack",
+        default=None,
+        metavar="NAME",
+        help="The pack an Arbor --autonomous-agent runs, a directory under the Arbor checkout's packs/; default serving.",
+    )
+    run.add_argument(
         "--reference",
         dest="references",
         action=REPEATABLE,
@@ -465,6 +474,19 @@ def _agent_directions(path: Path | None, agents: list[str]) -> str:
     return str(path.absolute())
 
 
+def _agent_pack(name: str | None, agents: list[str]) -> str:
+    """The pack the Arbor agents run, ``""`` for the adapter's default; refused with no agent to run it, or when it
+    is not one directory name under an Arbor checkout's ``packs/``."""
+
+    if name is None:
+        return ""
+    if not agents:
+        raise ValueError("--agent-pack needs an --autonomous-agent to run it")
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise ValueError(f"--agent-pack {name!r} is not the name of one pack directory")
+    return name
+
+
 def _user_directions(files: list[Path], max_branches: int) -> tuple[str, ...]:
     if len(files) > max_branches:
         raise ValueError(f"--specialist-prompt is given {len(files)} times, more than --max-branches {max_branches}")
@@ -540,6 +562,7 @@ def settings_from(
         dev_leases=args.dev_leases,
         playbook=PlaybookMode(args.playbook),
         agent_directions=_agent_directions(args.agent_directions, args.agents or []),
+        agent_pack=_agent_pack(args.agent_pack, args.agents or []),
     )
 
 
