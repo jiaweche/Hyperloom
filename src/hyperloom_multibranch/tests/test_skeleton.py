@@ -1820,6 +1820,44 @@ async def test_two_agents_each_start_at_the_root_on_the_share_of_the_session_s_d
     assert stage.sessions.plans == {"b01": "/shares/share-1.json", "b02": "/shares/share-2.json"}
 
 
+#: Two agents' keeps, each a gain alone and more together: ``a1`` and ``a2`` both land on the integration branch.
+AGENT_CURVES = {
+    frozenset(): {MAIN_POINT: 1000.0, CONC: 1000.0},
+    frozenset({"a1"}): {MAIN_POINT: 1040.0, CONC: 1040.0},
+    frozenset({"a2"}): {MAIN_POINT: 1030.0, CONC: 1030.0},
+    frozenset({"a1", "a2"}): {MAIN_POINT: 1075.0, CONC: 1075.0},
+}
+
+
+async def test_two_agents_started_on_their_shares_both_have_their_keeps_merged_into_the_integration_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The operator's first work item (plan, two Arbors, merge), with each agent's keep as its branch's scripted change.
+    async def split(
+        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None
+    ) -> tuple[str, ...]:
+        return ("/shares/share-1.json", "/shares/share-2.json")
+
+    monkeypatch.setattr(lifecycle, "agent_plans", split)
+    stage = _stage(tmp_path, child=child_with_patch(tmp_path))
+    stage.settings = replace(SETTINGS, agents=("/agents/arbor", "/agents/arbor"))
+    stage.scripts = {"b01": (tagged("a1"),), "b02": (tagged("a2"),)}
+    stage.explored = stage.measured = AGENT_CURVES
+    stage.judge = ScriptedCompletion([])
+
+    outcome = await stage.run()
+
+    assert outcome.stop_reason is SessionStopReason.TIME_EXHAUSTED
+    assert {branch for branch, origin in _origins(stage).items() if origin == "agent"} == {"b01", "b02"}
+    assert stage.sessions.plans == {"b01": "/shares/share-1.json", "b02": "/shares/share-2.json"}
+    a1, a2 = await stage.repo.head("b01"), await stage.repo.head("b02")
+    observer = stage.handle(Role.OBSERVER)
+    merged = {item.commit_id: item.last_merge.outcome.value for item in await observer.committed() if item.last_merge}
+    assert merged == {a1: "merged", a2: "merged"}
+    head = await stage.repo.head(INTEGRATION_BRANCH)
+    assert recipe_tags(await stage.repo.read_recipe(head)) == {"a1", "a2"}
+
+
 USER_DIRECTION = "Fuse the MoE gate into the router kernel."
 
 
