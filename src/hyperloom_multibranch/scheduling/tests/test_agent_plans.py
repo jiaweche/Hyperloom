@@ -2,15 +2,21 @@
 # SPDX-License-Identifier: MIT
 
 """The session's directions split into one share per Arbor agent (:mod:`hyperloom_multibranch.scheduling.agent_plans`),
-with a fake Arbor whose split deals the open directions round-robin."""
+with a fake Arbor whose split deals the open directions round-robin, and whose generate makes one direction per op of
+the profile at 2 % or more."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from hyperloom_multibranch.scheduling.agent_plans import agent_plans
+from hyperloom_multibranch.contracts.blackboard.records import OpShares
+from hyperloom_multibranch.scheduling.agent_plans import GENERATED_MAP, agent_plans
+from hyperloom_multibranch.specialist.agent_onboarding import PROFILE_FILE
 from hyperloom_multibranch.tests.test_specialist_arbor_adapter import CHECKOUT_FILES, MAP, _committed, _write
+
+#: The root's op shares as PRELUDE's profile reports them, in percent.
+ROOT_SHARES = OpShares("c0ffee", "prelude-1", "p1", {"attn_fwd": 41.0, "moe_gemm": 33.0, "rmsnorm": 1.5, "nccl": 9.0})
 
 
 def _map(tmp_path: Path, document: object = MAP) -> str:
@@ -48,3 +54,39 @@ async def test_no_branch_gets_a_share_without_a_map_an_arbor_enough_directions_o
     assert await agent_plans((other,), _map(tmp_path), tmp_path / "other-only") == ("",)
     assert await agent_plans((str(tmp_path / "nowhere"), arbor), _map(tmp_path), tmp_path / "unfetched") == ("", "")
     assert await agent_plans((arbor, arbor), _map(tmp_path, one), tmp_path / "too-few") == ("", "")
+
+
+async def test_without_a_map_two_arbor_agents_split_one_arbor_generates_from_the_root_s_op_shares(
+    tmp_path: Path,
+) -> None:
+    arbor, other = _agents(tmp_path)
+    work = tmp_path / "work"
+
+    plans = await agent_plans((arbor, other, arbor), "", work, ROOT_SHARES)
+
+    assert plans[1] == ""
+    assert [_ids(plans[0]), _ids(plans[2])] == [["m-attn_fwd", "m-nccl"], ["m-moe_gemm"]]
+    profile = json.loads((work / PROFILE_FILE).read_text(encoding="utf-8"))
+    assert (profile["commit"], profile["unit"], profile["shares"]) == ("c0ffee", "percent", dict(ROOT_SHARES.shares))
+    assert (work / GENERATED_MAP).is_file()
+
+
+async def test_no_map_is_generated_for_one_arbor_or_a_root_whose_shares_arbor_cannot_use(tmp_path: Path) -> None:
+    arbor, other = _agents(tmp_path)
+    small = OpShares("c0ffee", "prelude-1", "p1", {"rmsnorm": 1.5, "rope": 0.5})
+
+    assert await agent_plans((arbor, other), "", tmp_path / "one-arbor", ROOT_SHARES) == ("", "")
+    assert not (tmp_path / "one-arbor" / GENERATED_MAP).exists()
+    assert await agent_plans((arbor,), "", tmp_path / "alone", ROOT_SHARES) == ("",)
+    assert not (tmp_path / "alone").exists()
+    assert await agent_plans((arbor, arbor), "", tmp_path / "small", small) == ("", "")
+    assert not (tmp_path / "small" / GENERATED_MAP).exists()
+
+
+async def test_a_given_map_is_split_and_none_is_generated_even_with_the_root_s_op_shares(tmp_path: Path) -> None:
+    arbor, _ = _agents(tmp_path)
+
+    plans = await agent_plans((arbor, arbor), _map(tmp_path), tmp_path / "work", ROOT_SHARES)
+
+    assert [_ids(plans[0]), _ids(plans[1])] == [["m-attn", "m-allreduce"], ["m-moe"]]
+    assert not (tmp_path / "work" / GENERATED_MAP).exists()

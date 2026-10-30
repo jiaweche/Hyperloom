@@ -31,7 +31,8 @@ Each ``--autonomous-agent SOURCE`` opens one branch where EXPLORE starts, after 
 ``--max-branches``, whose specialist runs that third-party agent end to end in a sandbox of its own; a source that
 carries credentials in its URL is a usage error. ``--agent-directions FILE`` names a directions map that is split, after
 PRELUDE, into disjoint shares, one per Arbor agent among them, each its ``component.plan``; a map with no directions, or
-one given with no agent, is a usage error. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
+one given with no agent, is a usage error. Without one, two or more Arbors split a map Arbor generates from the root's
+profile. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
 serving template; a name that is not one directory, or one given with no agent, is a usage error, and a pack the Arbor
 checkout lacks is refused when the branch starts. ``--agent-launch FILE`` gives those Arbors the launch an AgentX
 recipe's adds to, which Magpie resolves from InferenceX and MB does not carry yet; a file the adapter cannot use, or one
@@ -401,6 +402,7 @@ def _add_agent_options(run: argparse.ArgumentParser) -> None:
         help=(
             'A directions map, a JSON list of directions or {"directions": [...]} as Arbor\'s component.plan reads it;'
             " split into disjoint shares, one per Arbor --autonomous-agent, before EXPLORE opens their branches."
+            " Default: for two or more Arbors, a map Arbor generates from the root's profile."
         ),
     )
     run.add_argument(

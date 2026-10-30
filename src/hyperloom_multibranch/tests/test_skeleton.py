@@ -58,6 +58,7 @@ from hyperloom_multibranch.contracts.blackboard.records import (
     LeaseStart,
     LlmUsage,
     BlackboardSnapshot,
+    OpShares,
     PendingCandidate,
     QuarantineEvent,
     RegressionCase,
@@ -1794,9 +1795,13 @@ async def test_two_agents_each_start_at_the_root_on_the_share_of_the_session_s_d
     # The split's own subprocesses are tested with a fake Arbor in scheduling/tests/test_agent_plans.py; here a
     # stand-in, since real subprocesses would let the virtual clock run past EXPLORE.
     asked: list[tuple[tuple[str, ...], str, Path]] = []
+    given: list[OpShares | None] = []
 
-    async def split(agents: tuple[str, ...], map_file: str, work_dir: Path) -> tuple[str, ...]:
+    async def split(
+        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None
+    ) -> tuple[str, ...]:
         asked.append((agents, map_file, work_dir))
+        given.append(root_shares)
         return ("/shares/share-1.json", "/shares/share-2.json")
 
     monkeypatch.setattr(lifecycle, "agent_plans", split)
@@ -1810,6 +1815,7 @@ async def test_two_agents_each_start_at_the_root_on_the_share_of_the_session_s_d
     assert asked == [(("/agents/arbor", "/agents/arbor"), "/maps/d.json", stage.layout.agent_plans)]
     assert {branch for branch, origin in _origins(stage).items() if origin == "agent"} == {"b01", "b02"}
     root = await stage.root()
+    assert given == [await stage.handle(Role.OBSERVER).op_shares(root)]
     assert stage.sessions.started["b01"] == stage.sessions.started["b02"] == root
     assert stage.sessions.plans == {"b01": "/shares/share-1.json", "b02": "/shares/share-2.json"}
 

@@ -18,7 +18,7 @@ from hyperloom_multibranch.blackboard.tests.factories import result
 from hyperloom_multibranch.contracts.blackboard.records import OpShares
 from hyperloom_multibranch.specialist import arbor_adapter
 from hyperloom_multibranch.specialist.agent_manifest import REFUSED_FILE, AgentManifest
-from hyperloom_multibranch.specialist.agent_onboarding import PROFILE_FILE, AgentSpec, make_ready
+from hyperloom_multibranch.specialist.agent_onboarding import PROFILE_FILE, AgentSpec, make_ready, root_profile
 from hyperloom_multibranch.specialist.arbor_adapter import (
     BRANCH_RUN,
     DOSSIER_PASS,
@@ -32,6 +32,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
     arbor_config,
     arbor_manifest,
     bench_command,
+    generate_directions,
     is_arbor,
     mapped,
     read_launch,
@@ -91,10 +92,19 @@ pathlib.Path("campaign.json").write_text(json.dumps({**config, "workspace": conf
 runpy.run_path("component.py", run_name="__main__")
 """
 #: Arbor's split in a fake checkout: the open directions of the map dealt in turn to the shares, or exit 1 when there
-#: are fewer than shares.
+#: are fewer than shares. Its generate: one direction per op of the profile at 2 % or more, largest first, or exit 1
+#: when there is none.
 FAKE_DIRECTIONS = """
 import json, pathlib, sys
 args = sys.argv[1:]
+if args[0] == "generate":
+    shares = json.loads(pathlib.Path(args[args.index("--profile") + 1]).read_text())["shares"]
+    ops = [op for op, share in sorted(shares.items(), key=lambda item: -item[1]) if share >= 2]
+    if not ops:
+        sys.exit("nothing above --min-share 2")
+    directions = [{"id": f"m-{op}", "kind": "increment", "title": op} for op in ops]
+    pathlib.Path(args[args.index("--out") + 1]).write_text(json.dumps({"directions": directions}))
+    sys.exit(0)
 directions = json.loads(pathlib.Path(args[1]).read_text())["directions"]
 shares, out = int(args[args.index("--shares") + 1]), pathlib.Path(args[args.index("--out") + 1])
 live = [entry for entry in directions if entry.get("status", "open") == "open"]
@@ -745,6 +755,25 @@ async def test_a_map_is_split_by_a_real_arbor_into_shares_each_a_plan_it_accepts
     assert set().union(*dealt) == {"m-attn", "m-moe", "m-allreduce"} and not dealt[0] & dealt[1]
     with pytest.raises(SplitFailed, match="exited 1"):
         await split_directions(checkout, map_file, 4, tmp_path / "four")
+
+
+@pytest.mark.skipif(not ARBOR_CHECKOUT, reason="HYPERLOOM_TEST_ARBOR_CHECKOUT names no Arbor checkout")
+async def test_a_real_arbor_generates_from_the_root_s_profile_a_map_it_splits(tmp_path: Path) -> None:
+    checkout = Path(ARBOR_CHECKOUT)
+    ops = {"mla_decode_fwd": 38.0, "fused_moe_kernel": 31.0, "rccl_all_reduce": 12.0, "rmsnorm": 0.5}
+    profile = root_profile(OpShares("c0ffee", "prelude-1", "p1", ops), tmp_path / "root")
+    small = root_profile(OpShares("c0ffee", "prelude-1", "p1", {"rmsnorm": 0.5}), tmp_path / "small")
+    assert profile is not None and small is not None
+
+    generated = await generate_directions(checkout, profile, tmp_path / "map.json")
+    shares = await split_directions(checkout, generated, 2, tmp_path / "shares")
+
+    ids = [entry["id"] for entry in json.loads(generated.read_text())["directions"]]
+    assert ids == ["m-attn", "m-moe", "m-comm"]
+    dealt = [{entry["id"] for entry in json.loads(share.read_text())["directions"]} for share in shares]
+    assert set().union(*dealt) == set(ids) and not dealt[0] & dealt[1]
+    with pytest.raises(SplitFailed, match="exited 1"):
+        await generate_directions(checkout, small, tmp_path / "none.json")
 
 
 @pytest.mark.skipif(not ARBOR_CHECKOUT, reason="HYPERLOOM_TEST_ARBOR_CHECKOUT names no Arbor checkout")

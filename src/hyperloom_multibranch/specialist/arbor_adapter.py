@@ -15,8 +15,8 @@ would write the same config, so a refusal, this side's or Arbor's own, fails the
 
 The spec's ``plan``, the file of the branch's share of the session's directions, becomes ``component.plan``. Those
 shares come from one map, which Arbor's dossier pass writes on one lease before the branches open
-(:data:`DOSSIER_PASS`, its end read by :func:`mapped`), split by Arbor's own command line
-(:func:`split_directions`); the scheduling calls these. The root's op shares are not the adapter's: the preflight sets
+(:data:`DOSSIER_PASS`, its end read by :func:`mapped`) or Arbor generates from the root's profile with no GPU time
+(:func:`generate_directions`), split by Arbor's own command line (:func:`split_directions`); the scheduling calls these. The root's op shares are not the adapter's: the preflight sets
 ``component.profile`` for Arbor as for any agent run as a component
 (:func:`~hyperloom_multibranch.specialist.agent_onboarding.component_config`).
 
@@ -119,7 +119,7 @@ class ArborRefused(ValueError):
 
 
 class SplitFailed(RuntimeError):
-    """Arbor could not split a map into shares; the message says what it printed."""
+    """Arbor could not generate a map, or split one into shares; the message says what it printed."""
 
 
 @dataclass(frozen=True)
@@ -527,7 +527,26 @@ async def split_directions(checkout: Path, map_file: Path, shares: int, out: Pat
     line in ``checkout``; the plan files, in order, each a ``component.plan``. Raise :class:`SplitFailed` with what
     Arbor printed when it cannot: a map with fewer independent groups than shares, or one that does not validate."""
 
-    argv = [PYTHON, "-m", "arbor.directions", "split", str(map_file), "--shares", str(shares), "--out", str(out)]
+    paths = tuple(out / f"share-{number}.json" for number in range(1, shares + 1))
+    await _directions(checkout, paths, "split", str(map_file), "--shares", str(shares), "--out", str(out))
+    return paths
+
+
+async def generate_directions(checkout: Path, profile: Path, out: Path) -> Path:
+    """A map generated from the root profile ``profile``, the file ``component.profile`` names, by Arbor's own
+    command line in ``checkout``, with no GPU time: one open direction per op family, ranked by its share. Written to
+    ``out``, which :func:`split_directions` splits as any map. Raise :class:`SplitFailed` with what Arbor printed when
+    it cannot: a profile with no share above its cut, or an Arbor older than ``generate``."""
+
+    await _directions(checkout, (out,), "generate", "--profile", str(profile), "--out", str(out))
+    return out
+
+
+async def _directions(checkout: Path, written: tuple[Path, ...], *args: str) -> None:
+    """Run ``python3 -m arbor.directions`` with ``args`` in ``checkout``; raise :class:`SplitFailed` with what it
+    printed when it fails or leaves any of ``written`` unwritten."""
+
+    argv = [PYTHON, "-m", "arbor.directions", *args]
     process = await asyncio.create_subprocess_exec(
         *argv, cwd=checkout, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
     )
@@ -535,11 +554,9 @@ async def split_directions(checkout: Path, map_file: Path, shares: int, out: Pat
     said = " | ".join(line.strip() for line in output.decode(errors="replace").strip().splitlines()[-_TAIL_LINES:])
     if process.returncode != 0:
         raise SplitFailed(f"`{shlex.join(argv)}` exited {process.returncode}: {said}")
-    paths = tuple(out / f"share-{number}.json" for number in range(1, shares + 1))
-    missing = [path.name for path in paths if not path.is_file()]
+    missing = [path.name for path in written if not path.is_file()]
     if missing:
         raise SplitFailed(f"`{shlex.join(argv)}` wrote no {', '.join(missing)}: {said}")
-    return paths
 
 
 __all__ = [
@@ -560,6 +577,7 @@ __all__ = [
     "arbor_config",
     "arbor_manifest",
     "bench_command",
+    "generate_directions",
     "is_arbor",
     "mapped",
     "read_launch",

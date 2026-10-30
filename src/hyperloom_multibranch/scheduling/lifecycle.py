@@ -432,7 +432,7 @@ class Session:
                 policy_versions=self._policy_versions(),
             )
         )
-        plans = await agent_plans(self._settings.agents, self._settings.agent_directions, self._layout.agent_plans)
+        plans = await self._agent_plans(prelude.root_commit)
         explore_end = budget.explore_end(self._clock.now(), prelude.longest_root_test)
         self._phase("explore", explore_end=explore_end)
         window = ExploreWindow(
@@ -456,6 +456,14 @@ class Session:
         candidates = await self._final_candidates()
         await self._stopper.end_exploration(reason)
         return await self._final(candidates, reason)
+
+    async def _agent_plans(self, root_commit: str) -> tuple[str, ...]:
+        """Each agent branch's share of the directions: of the user's map, or of one generated from the op shares of
+        ``root_commit``, PRELUDE's root, for two or more Arbors (:mod:`agent_plans`)."""
+
+        settings = self._settings
+        shares = await self._blackboard.op_shares(root_commit) if settings.agents else None
+        return await agent_plans(settings.agents, settings.agent_directions, self._layout.agent_plans, shares)
 
     async def _final_phases(self, candidates: FinalCandidates, ended: SessionStopReason) -> SessionOutcome:
         """FINAL alone over ``candidates``, inside the phases coroutine, so a failure still goes through CLOSE and
