@@ -125,8 +125,9 @@ class AgentSpec:
     run as a component, ``deadline``, the clock time it ends by, ``root``, the commit of ``workspace`` its patches
     are made against, and ``root_shares``, the op shares of the session root's profile (``None`` when it has none).
     Arbor (:mod:`arbor_adapter`) is also given ``ep``, the expert-parallel size the workload is served at, and may be
-    given ``plan``, the file of the branch's share of the session's directions, and ``pack``, the name of the pack it
-    runs (``None`` for the adapter's default); the onboarding model is told none of them."""
+    given ``plan``, the file of the branch's share of the session's directions, ``pack``, the name of the pack it
+    runs (``None`` for the adapter's default), and ``launch``, the file of the launch the recipe's adds to (``None``
+    when the recipe's is the whole launch); the onboarding model is told none of them."""
 
     model: str
     framework: str
@@ -150,6 +151,7 @@ class AgentSpec:
     plan: str | None = None
     ep: int = DEFAULT_EP
     pack: str | None = None
+    launch: str | None = None
 
     def to_document(self) -> dict[str, object]:
         return {

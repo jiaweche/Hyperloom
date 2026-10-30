@@ -19,6 +19,10 @@ shares come from one map, which Arbor's dossier pass writes on one lease before 
 (:func:`split_directions`); the scheduling calls these. The root's op shares are not the adapter's: the preflight sets
 ``component.profile`` for Arbor as for any agent run as a component
 (:func:`~hyperloom_multibranch.specialist.agent_onboarding.component_config`).
+
+The spec's ``launch``, a launch file (:func:`read_launch`), stands in for what MB does not carry yet: the launch a
+Magpie AgentX recipe resolves from InferenceX, of which the root recipe holds only what is added to it. Without one,
+an AgentX branch is refused before Arbor starts, which would otherwise serve defaults MB does not measure.
 """
 
 from __future__ import annotations
@@ -57,6 +61,10 @@ MB_DIR = "hyperloom-mb"
 #: under the session, which the branch's sandbox need not see.
 PLAN_FILE = f"{MB_DIR}/plan.json"
 OUTBOX = "keeps"
+#: The keys of a launch file (:func:`read_launch`): the first two it must give, the others it may.
+LAUNCH_KEYS = ("server_flags", "server_env", "model_name", "client")
+#: The workload kind whose recipe Magpie resolves, the root's launch holding only what is added to it.
+AGENTX = "agentx"
 #: Arbor gives vLLM its TP itself and SGLang none, which reads it from these flags only.
 SGLANG = "sglang"
 SGLANG_TP_FLAGS = ("--tp-size", "--tp", "--tensor-parallel-size")
@@ -115,6 +123,46 @@ class SplitFailed(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ResolvedLaunch:
+    """A server's launch as the recipe's framework resolves it: its ``server_flags`` and ``server_env``, the
+    ``model_name`` the server answers to and ``client``, the gate's client, each ``""`` when not given. The recipe's
+    own launch is added to it, as Magpie adds a root recipe's ``extra_server_args`` and ``extra_envs``."""
+
+    server_flags: str = ""
+    server_env: Mapping[str, str] = field(default_factory=dict)
+    model_name: str = ""
+    client: str = ""
+
+
+def read_launch(path: Path) -> ResolvedLaunch:
+    """The launch in the file ``path``, a JSON object of :data:`LAUNCH_KEYS` (the repository's
+    ``examples/multibranch-arbor-launch`` has a template); raise :class:`ArborRefused` with every reason it cannot be
+    used: unreadable, a key it does not have, no ``server_flags``, a ``server_env`` that is not an object of strings,
+    or a ``client`` Arbor could not fill."""
+
+    try:
+        document = json.loads(path.read_text(encoding=ENCODING))
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise ArborRefused([f"the launch file {path} cannot be read: {error}"]) from error
+    if not isinstance(document, dict):
+        raise ArborRefused([f"the launch file {path} is not a JSON object"])
+    unknown = sorted(set(document) - set(LAUNCH_KEYS))
+    reasons = [f"it has keys a launch does not: {', '.join(unknown)}"] if unknown else []
+    flags, env = document.get("server_flags"), document.get("server_env")
+    if not isinstance(flags, str) or not flags.strip():
+        reasons.append("it gives no server_flags, the launch's server arguments")
+    if not isinstance(env, dict) or not all(isinstance(value, str) for value in env.values()):
+        reasons.append("its server_env is not an object of strings")
+    texts = {key: document.get(key, "") for key in LAUNCH_KEYS[2:]}
+    reasons += [f"its {key} is not a string" for key, value in texts.items() if not isinstance(value, str)]
+    if reasons:
+        raise ArborRefused([f"the launch file {path}: {reason}" for reason in reasons])
+    if texts["client"]:
+        bench_command(texts["client"])
+    return ResolvedLaunch(flags, env, texts["model_name"], texts["client"])
+
+
+@dataclass(frozen=True)
 class ArborCheckout:
     """Arbor at ``commit`` of ``source``, checked out at ``path``, run with ``env``."""
 
@@ -155,7 +203,7 @@ def arbor_manifest(spec: AgentSpec, checkout: ArborCheckout, run: ArborRun) -> A
 
     path = checkout.path.absolute()
     config = arbor_config(spec, path, run)
-    reasons = refusals(config, checkout.env)
+    reasons = [*_launch_refusals(spec), *refusals(config, checkout.env)]
     if reasons:
         raise ArborRefused(reasons)
     (path / run.session_dir).mkdir(parents=True, exist_ok=True)
@@ -188,17 +236,21 @@ def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, An
     """Arbor's config for ``run`` of ``spec``: in component mode on the host, the recipe's launch on the pack the spec
     names in ``checkout`` (the serving template by default), ending by the spec's deadline, its patches made against
     its root, the integration notes read every iteration, every measurement by the gate's client when the spec has
-    one, and the host's plan when it gives one, which a run that stops at its map does not take.
+    one, and the host's plan when it gives one, which a run that stops at its map does not take. A spec with a launch
+    file is served the file's launch with the recipe's added to it, and measured by the file's client when the spec
+    has none.
 
     The cards are numbered from 0, as the sandbox shows them; Arbor never masks them itself in this mode."""
 
     name = spec.pack or PACK
     pack = checkout / "packs" / name
+    launch = read_launch(Path(spec.launch)) if spec.launch else ResolvedLaunch()
+    client = spec.client or launch.client
     component: dict[str, Any] = {"host": HOST, "deadline": int(spec.deadline), "root": spec.root, "outbox": OUTBOX}
     if spec.knowledge:
         component["notes"] = spec.knowledge
-    if spec.client:
-        component["bench_command"] = bench_command(spec.client)
+    if client:
+        component["bench_command"] = bench_command(client)
     if run.stop_at:
         component["stop_at"] = run.stop_at
     elif spec.plan:
@@ -211,10 +263,10 @@ def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, An
         "docker_container": "@host",
         "framework": spec.framework,
         "model_path": spec.model,
-        "model_name": _client_value(spec.client, MODEL) or spec.model,
+        "model_name": launch.model_name or _client_value(client, MODEL) or spec.model,
         "tp": spec.tp,
-        "server_flags": server_flags(spec),
-        "server_env": dict(spec.envs),
+        "server_flags": server_flags(spec, launch.server_flags),
+        "server_env": {**launch.server_env, **spec.envs},
         "bench_script": str(pack / BENCH_SCRIPT),
         "correctness_script": str(pack / CORRECTNESS_SCRIPT),
         "workspace_root": spec.workspace,
@@ -226,19 +278,33 @@ def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, An
     }
 
 
-def server_flags(spec: AgentSpec) -> str:
-    """The recipe's server arguments as Arbor launches them: on SGLang, with the workload's TP size and its
-    expert-parallel size, each unless the arguments set it; the expert-parallel size only when it divides the TP, as
-    MB's own launch has it."""
+def server_flags(spec: AgentSpec, resolved: str = "") -> str:
+    """The recipe's server arguments as Arbor launches them, after the ``resolved`` launch's when there is one: on
+    SGLang, with the workload's TP size and its expert-parallel size, each unless the arguments set it; the
+    expert-parallel size only when it divides the TP, as MB's own launch has it."""
 
+    args = merge_server_args(resolved, spec.server_args)
     if spec.framework != SGLANG:
-        return spec.server_args
-    named = _flag_names(spec.server_args)
+        return args
+    named = _flag_names(args)
     added = [] if named & set(SGLANG_TP_FLAGS) else [f"{SGLANG_TP_FLAGS[0]} {spec.tp}"]
     flag, aliases, _ = EXPERT_PARALLEL_FLAGS[SGLANG]
     if spec.ep > 1 and spec.tp % spec.ep == 0 and not named & set(aliases):
         added.append(f"{flag} {spec.ep}")
-    return merge_server_args(spec.server_args, *added)
+    return merge_server_args(args, *added)
+
+
+def _launch_refusals(spec: AgentSpec) -> list[str]:
+    """Why ``spec``'s branch cannot serve what MB measures: an AgentX recipe's launch, which holds only what Magpie
+    adds to the one it resolves from InferenceX, given without that launch."""
+
+    if spec.workload.get("kind") != AGENTX or spec.launch:
+        return []
+    return [
+        "an AgentX recipe's launch holds only what Magpie adds to the one it resolves from InferenceX, so Arbor would"
+        " serve defaults MB does not measure: give the resolved launch with --agent-launch"
+        " (examples/multibranch-arbor-launch)"
+    ]
 
 
 def _flag_names(args: str) -> set[str]:
@@ -482,18 +548,21 @@ __all__ = [
     "DOSSIER_PASS",
     "EXIT_REFUSED",
     "INSTALL",
+    "LAUNCH_KEYS",
     "MAP_FILE",
     "MAPPED",
     "MARKERS",
     "ArborCheckout",
     "ArborRefused",
     "ArborRun",
+    "ResolvedLaunch",
     "SplitFailed",
     "arbor_config",
     "arbor_manifest",
     "bench_command",
     "is_arbor",
     "mapped",
+    "read_launch",
     "refusals",
     "refused_reasons",
     "server_flags",

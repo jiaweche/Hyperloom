@@ -73,8 +73,9 @@ class PeerSetup:
     reachable under the workload. ``references`` names each directory of reference material the run was given, already
     copied into the session, for the specialist role to send the specialists to. ``dev_leases`` is how many dev
     sandboxes the session lends its specialists at once, from the toolbox's cards; 0 lends none. ``agents`` are the
-    third-party agents the user named, each run on an autonomous branch of its own, and ``agent_pack`` the pack an
-    Arbor among them runs (``""`` for the adapter's default).
+    third-party agents the user named, each run on an autonomous branch of its own, ``agent_pack`` the pack an
+    Arbor among them runs (``""`` for the adapter's default), and ``agent_launch`` the file of the launch its recipe's
+    adds to (``""`` when the recipe's is the whole launch).
     """
 
     layout: SessionLayout
@@ -87,6 +88,7 @@ class PeerSetup:
     dev_leases: int
     agents: tuple[str, ...]
     agent_pack: str = ""
+    agent_launch: str = ""
 
 
 PeerFactory = Callable[[PeerSetup], Peers]

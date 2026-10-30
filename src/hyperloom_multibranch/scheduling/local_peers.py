@@ -684,7 +684,7 @@ def model_backed_sessions(command: AgentCommand) -> SpecialistSessions:
         native = tuple(component for component in wiring.native if component != workload.framework)
         sessions = _sessions_over_source(open_sessions, layout.source, workload.framework, native)
         agents = AgentSessions(
-            _agent_spec(workload, wiring.setup.agent_pack),
+            _agent_spec(workload, wiring.setup.agent_pack, wiring.setup.agent_launch),
             command,
             agent.env,
             wiring.toolbox,
@@ -752,9 +752,10 @@ def native_trees(environ: Mapping[str, str]) -> dict[str, NativeTree]:
     return trees
 
 
-def _agent_spec(workload: Workload, pack: str = "") -> AgentSpec:
-    """What every agent of a session of ``workload`` is asked to optimize, an Arbor on ``pack`` when one is named;
-    the root's launch, the workspace, the cards and the port are each branch's own."""
+def _agent_spec(workload: Workload, pack: str = "", launch: str = "") -> AgentSpec:
+    """What every agent of a session of ``workload`` is asked to optimize, an Arbor on ``pack`` when one is named,
+    served the launch in the file ``launch`` with the root's added when one is given; the root's launch, the
+    workspace, the cards and the port are each branch's own."""
 
     from hyperloom_multibranch.specialist.agent_onboarding import AgentSpec
 
@@ -778,6 +779,7 @@ def _agent_spec(workload: Workload, pack: str = "") -> AgentSpec:
         port=AGENT_PORT,
         ep=workload.ep,
         pack=pack or None,
+        launch=launch or None,
     )
 
 

@@ -33,7 +33,9 @@ carries credentials in its URL is a usage error. ``--agent-directions FILE`` nam
 PRELUDE, into disjoint shares, one per Arbor agent among them, each its ``component.plan``; a map with no directions, or
 one given with no agent, is a usage error. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
 serving template; a name that is not one directory, or one given with no agent, is a usage error, and a pack the Arbor
-checkout lacks is refused when the branch starts. Each ``--specialist-prompt`` file holds a direction the user wrote
+checkout lacks is refused when the branch starts. ``--agent-launch FILE`` gives those Arbors the launch an AgentX
+recipe's adds to, which Magpie resolves from InferenceX and MB does not carry yet; a file the adapter cannot use, or one
+given with no agent, is a usage error. Each ``--specialist-prompt`` file holds a direction the user wrote
 for one specialist: its branch opens at PRELUDE's
 root ahead of the opening batch, counted within ``--max-branches``, its specialist sees the text in every launch
 prompt, and the judge neither stops it nor lowers its K for its first judged tests; an empty or unreadable file, or
@@ -171,6 +173,7 @@ from hyperloom_multibranch.scheduling.settings import (
     RunSettings,
     Workload,
 )
+from hyperloom_multibranch.specialist.arbor_adapter import ArborRefused, read_launch
 
 PROG = "hyperloom-multibranch"
 EXIT_FAILED = 1
@@ -390,6 +393,18 @@ def _add_specialist_input_options(run: argparse.ArgumentParser) -> None:
         help="The pack an Arbor --autonomous-agent runs, a directory under the Arbor checkout's packs/; default serving.",
     )
     run.add_argument(
+        "--agent-launch",
+        dest="agent_launch",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "The launch an AgentX recipe's adds to, as Magpie resolves it from InferenceX, for an Arbor"
+            " --autonomous-agent: a JSON object of server_flags, server_env, model_name and client"
+            " (examples/multibranch-arbor-launch)."
+        ),
+    )
+    run.add_argument(
         "--reference",
         dest="references",
         action=REPEATABLE,
@@ -487,6 +502,21 @@ def _agent_pack(name: str | None, agents: list[str]) -> str:
     return name
 
 
+def _agent_launch(path: Path | None, agents: list[str]) -> str:
+    """The absolute path of the launch file the Arbor agents are served, ``""`` without one; refused with no agent to
+    serve, or with every reason the adapter could not use it."""
+
+    if path is None:
+        return ""
+    if not agents:
+        raise ValueError("--agent-launch needs an --autonomous-agent to serve it")
+    try:
+        read_launch(path)
+    except ArborRefused as exc:
+        raise ValueError(f"--agent-launch: {exc}") from exc
+    return str(path.absolute())
+
+
 def _user_directions(files: list[Path], max_branches: int) -> tuple[str, ...]:
     if len(files) > max_branches:
         raise ValueError(f"--specialist-prompt is given {len(files)} times, more than --max-branches {max_branches}")
@@ -563,6 +593,7 @@ def settings_from(
         playbook=PlaybookMode(args.playbook),
         agent_directions=_agent_directions(args.agent_directions, args.agents or []),
         agent_pack=_agent_pack(args.agent_pack, args.agents or []),
+        agent_launch=_agent_launch(args.agent_launch, args.agents or []),
     )
 
 

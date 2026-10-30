@@ -265,6 +265,7 @@ class Session:
             settings.dev_leases,
             settings.agents,
             settings.agent_pack,
+            settings.agent_launch,
         )
 
     def _score_with_defaults(self) -> None:

@@ -23,6 +23,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
     BRANCH_RUN,
     DOSSIER_PASS,
     INSTALL,
+    LAUNCH_KEYS,
     MARKERS,
     PLAN_FILE,
     ArborCheckout,
@@ -33,6 +34,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
     bench_command,
     is_arbor,
     mapped,
+    read_launch,
     refusals,
     refused_reasons,
     split_directions,
@@ -399,6 +401,89 @@ def test_arbor_runs_the_pack_the_spec_names_and_one_its_checkout_lacks_is_refuse
     assert not [reason for reason in refusals(config, {}) if "pack" in reason or "script" in reason]
     assert any("agentx-gone" in reason and "pack.yaml" in reason for reason in refusals(missing, {}))
     assert arbor_config(spec, checkout, BRANCH_RUN)["pack"] == "serving"
+
+
+#: A launch Magpie resolves from an InferenceX AgentX recipe (boards/hyperloom-multibranch#157 c4405), as a launch file.
+RESOLVED = {
+    "server_flags": "--mem-fraction-static 0.8 --chunked-prefill-size 16384",
+    "server_env": {"SGLANG_SIMULATE_ACC_LEN": "3", "VLLM_ROCM_USE_AITER": "0"},
+    "model_name": "Qwen/Qwen3.8-Flash-Next",
+}
+AGENTX_WORKLOAD = {"kind": "agentx", "conc": 8}
+#: The repository's template of a launch file.
+TEMPLATE = Path(__file__).parents[3] / "examples" / "multibranch-arbor-launch" / "launch.template.json"
+
+
+def _launch_file(tmp_path: Path, document: object) -> str:
+    path = tmp_path / "launch.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return str(path)
+
+
+def test_a_launch_file_is_served_with_the_recipe_s_launch_added_to_it(tmp_path: Path) -> None:
+    launch = _launch_file(tmp_path, RESOLVED)
+    spec = _spec(tmp_path, framework="sglang", server_args="--max-running-requests 64", tp=1, client="", launch=launch)
+
+    config = arbor_config(spec, tmp_path / "checkout", BRANCH_RUN)
+
+    flags = f"{RESOLVED['server_flags']} --max-running-requests 64 --tp-size 1"
+    envs = {"SGLANG_SIMULATE_ACC_LEN": "3", "VLLM_ROCM_USE_AITER": "1", TABLE_ENV: os.pathsep.join(START_TABLE_PARTS)}
+    assert (config["server_flags"], config["server_env"]) == (flags, envs)
+    assert config["model_name"] == "Qwen/Qwen3.8-Flash-Next"
+    assert "bench_command" not in config["component"]
+
+
+def test_a_launch_file_s_client_measures_arbor_only_when_mb_gives_none(tmp_path: Path) -> None:
+    client = "python3 bench.py --port 8000 --result-dir /tmp/out --model served"
+    spec = _spec(tmp_path, launch=_launch_file(tmp_path, {**RESOLVED, "model_name": "", "client": client}))
+
+    given = arbor_config(replace(spec, client=""), tmp_path / "checkout", BRANCH_RUN)
+    own = arbor_config(spec, tmp_path / "checkout", BRANCH_RUN)
+
+    assert (given["component"]["bench_command"], given["model_name"]) == (bench_command(client), "served")
+    assert (own["component"]["bench_command"], own["model_name"]) == (bench_command(spec.client), "Qwen/Qwen3-14B-FP8")
+
+
+def test_an_agentx_branch_is_refused_before_arbor_starts_unless_it_is_given_the_resolved_launch(tmp_path: Path) -> None:
+    checkout = _write(tmp_path / "checkout", CHECKOUT_FILES)
+    spec = _spec(tmp_path, framework="sglang", server_args="", workload=AGENTX_WORKLOAD)
+
+    with pytest.raises(ArborRefused, match="--agent-launch"):
+        arbor_manifest(spec, ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN)
+    launched = replace(spec, launch=_launch_file(tmp_path, RESOLVED))
+    manifest = arbor_manifest(launched, ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN)
+
+    assert manifest.config["server_flags"] == f"{RESOLVED['server_flags']} --tp-size 2"
+
+
+@pytest.mark.parametrize(
+    ("document", "said"),
+    [
+        ("{", "cannot be read"),
+        (["--tp 1"], "is not a JSON object"),
+        ({"server_env": {}}, "no server_flags"),
+        ({**RESOLVED, "server_env": {"N": 1}}, "server_env is not an object of strings"),
+        ({**RESOLVED, "flags": "--tp 1", "model_name": 7}, "keys a launch does not: flags; its model_name is not"),
+        ({**RESOLVED, "client": "python3 bench.py --port 8000"}, "names no --result-dir"),
+    ],
+    ids=["unreadable", "a-list", "no-flags", "env-not-strings", "unknown-key-and-name", "client-arbor-cannot-fill"],
+)
+def test_a_launch_file_the_adapter_cannot_use_is_refused_with_why(tmp_path: Path, document: object, said: str) -> None:
+    path = Path(_launch_file(tmp_path, document))
+    if isinstance(document, str):
+        path.write_text(document, encoding="utf-8")
+
+    with pytest.raises(ArborRefused) as refused:
+        read_launch(path)
+
+    assert said.split("; ")[0] in str(refused.value) and said.split("; ")[-1] in str(refused.value)
+
+
+def test_the_repository_s_launch_template_is_a_launch_file_the_adapter_reads() -> None:
+    launch = read_launch(TEMPLATE)
+
+    assert set(json.loads(TEMPLATE.read_text(encoding="utf-8"))) == set(LAUNCH_KEYS)
+    assert launch.server_flags and launch.server_env and launch.client == ""
 
 
 @pytest.mark.parametrize(

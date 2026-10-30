@@ -349,6 +349,37 @@ def test_an_agent_pack_without_an_agent_or_not_one_directory_is_a_usage_error(ex
         _settings(*extra)
 
 
+def test_the_agent_launch_file_is_kept_by_its_absolute_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "launch.json").write_text(json.dumps({"server_flags": "--tp 1", "server_env": {}}))
+
+    settings = _settings("--autonomous-agent", "/agents/arbor", "--agent-launch", "launch.json")
+
+    assert settings.agent_launch == str(tmp_path / "launch.json")
+    assert _settings("--autonomous-agent", "/agents/arbor").agent_launch == ""
+
+
+@pytest.mark.parametrize(
+    ("document", "agent", "match"),
+    [
+        ({"server_flags": "--tp 1", "server_env": {}}, False, "needs an --autonomous-agent"),
+        ({"server_env": {}}, True, "no server_flags"),
+        (None, True, "cannot be read"),
+    ],
+    ids=["no-agent", "no-flags", "no-file"],
+)
+def test_an_agent_launch_without_an_agent_or_unusable_is_a_usage_error(
+    tmp_path: Path, document: object, agent: bool, match: str
+) -> None:
+    path = tmp_path / "launch.json"
+    if document is not None:
+        path.write_text(json.dumps(document))
+    extra = ["--autonomous-agent", "/agents/arbor"] if agent else []
+
+    with pytest.raises(ValueError, match=match):
+        _settings(*extra, "--agent-launch", str(path))
+
+
 @pytest.mark.parametrize(
     ("document", "agent", "match"),
     [
