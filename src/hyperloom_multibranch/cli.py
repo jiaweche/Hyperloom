@@ -177,6 +177,7 @@ DEFAULT_MAX_BRANCHES = 4
 DEFAULT_MAX_K_PER_BRANCH = 2
 DEFAULT_JUDGE_INTERVAL_SECONDS = 600.0
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+ENCODING = "utf-8"
 log = logging.getLogger(__name__)
 #: The GPU types Magpie has a benchmark script of their own for. ``hyperloom optimize`` runs mi308x and mi325x on
 #: mi300x's script through a mapping its package keeps private, so a session accepts only these until it is public.
@@ -455,7 +456,7 @@ def _agent_directions(path: Path | None, agents: list[str]) -> str:
     if not agents:
         raise ValueError("--agent-directions needs an --autonomous-agent to split it for")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(path.read_text(encoding=ENCODING))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"--agent-directions {path} cannot be read: {exc}") from exc
     directions = document.get("directions") if isinstance(document, dict) else document
@@ -470,7 +471,7 @@ def _user_directions(files: list[Path], max_branches: int) -> tuple[str, ...]:
     directions = []
     for path in files:
         try:
-            text = path.read_text(encoding="utf-8").strip()
+            text = path.read_text(encoding=ENCODING).strip()
         except (OSError, UnicodeDecodeError) as exc:
             raise ValueError(f"--specialist-prompt {path} cannot be read: {exc}") from exc
         if not text:
@@ -688,7 +689,7 @@ async def _final_only(persisted: PersistedRun, peer_factory: PeerFactory, servic
 
 
 def _file_handler(path: Path) -> logging.Handler:
-    handler = logging.FileHandler(path, encoding="utf-8")
+    handler = logging.FileHandler(path, encoding=ENCODING)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     return handler
 
