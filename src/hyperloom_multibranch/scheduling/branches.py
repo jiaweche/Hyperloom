@@ -95,12 +95,13 @@ class BatchStart:
 class Launch:
     """What a branch's specialist starts on: the repair the branch was opened for, the focus the session's briefs keep
     for it unless ``None``, the direction the user wrote for a user branch, and the agent the user named for an agent's
-    branch."""
+    branch with the file of its share of the session's directions, if it has one."""
 
     repair: RepairRequest | None = None
     focus: str | None = None
     direction: str = ""
     agent: str = ""
+    plan: str = ""
 
 
 class BranchControl:
@@ -161,12 +162,14 @@ class BranchControl:
         return await self._open_named(BranchOrigin.USER, launches, start_commit, deadline)
 
     async def open_agent_branches(
-        self, agents: tuple[str, ...], start_commit: str, deadline: float
+        self, agents: tuple[str, ...], start_commit: str, deadline: float, plans: tuple[str, ...] = ()
     ) -> tuple[BranchEntry, ...]:
         """Open one :attr:`BranchOrigin.AGENT` branch at ``start_commit`` for each agent source the user named, as
-        :meth:`open_user_branches` opens the user's directions; no judge changes its K of :data:`STARTED_K`."""
+        :meth:`open_user_branches` opens the user's directions; no judge changes its K of :data:`STARTED_K`. ``plans``
+        gives each agent, in order, its share of the session's directions (``""``, or none given, for no share)."""
 
-        launches = tuple(Launch(focus="", agent=agent) for agent in agents)
+        shares = plans + ("",) * (len(agents) - len(plans))
+        launches = tuple(Launch(focus="", agent=agent, plan=plan) for agent, plan in zip(agents, shares))
         return await self._open_named(BranchOrigin.AGENT, launches, start_commit, deadline)
 
     async def _open_named(
@@ -388,7 +391,9 @@ class BranchControl:
         self._deadlines[entry.branch] = deadline
         await self.push_quota()
         self._specialists.add(entry.branch)
-        task = BranchTask(repair=launch.repair, direction=launch.direction, agent=launch.agent, deadline=deadline)
+        task = BranchTask(
+            repair=launch.repair, direction=launch.direction, agent=launch.agent, deadline=deadline, plan=launch.plan
+        )
         started = await settled(self._lifecycle.start(entry.branch, start_commit, task))
         if isinstance(started, BaseException):
             self._specialists.discard(entry.branch)

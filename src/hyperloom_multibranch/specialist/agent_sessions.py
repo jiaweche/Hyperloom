@@ -116,13 +116,14 @@ class AgentSessions:
     _taken: dict[str, int] = field(default_factory=dict, init=False)
 
     def session(self, start: SessionStart, place: BranchPlace) -> AutonomousSession:
-        """The run of the agent of ``start``'s branch, in ``place``."""
+        """The run of the agent of ``start``'s branch, in ``place``, with the branch's share of the session's
+        directions when it has one."""
 
         branch, component = start.branch, self.spec.framework
         index = self._taken.setdefault(branch, len(self._taken))
         port = self.spec.port + index * PORTS_PER_AGENT
         client = "" if self.client is None else self.client.command(port, place.workspace / AGENT_DIR / BENCH_DIR)
-        spec = replace(self.spec, port=port, client=client)
+        spec = replace(self.spec, port=port, client=client, plan=start.task.plan or None)
         source = place.worktree.path / PurePosixPath(COMPONENT_LAYOUTS[component].upstream_prefix).parent
         onboard = cli_onboard(self.command, self.env, branch, place.blackboard)
 

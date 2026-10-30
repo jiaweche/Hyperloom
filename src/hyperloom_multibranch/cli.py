@@ -29,7 +29,9 @@ under ``HYPERLOOM_RSI_WRITE_ONLY=1``, the session plays none and is judged as be
 envelope or probation.
 Each ``--autonomous-agent SOURCE`` opens one branch where EXPLORE starts, after the user's directions and within
 ``--max-branches``, whose specialist runs that third-party agent end to end in a sandbox of its own; a source that
-carries credentials in its URL is a usage error. Each ``--specialist-prompt`` file holds a direction the user wrote
+carries credentials in its URL is a usage error. ``--agent-directions FILE`` names a directions map that is split, after
+PRELUDE, into disjoint shares, one per Arbor agent among them, each its ``component.plan``; a map with no directions, or
+one given with no agent, is a usage error. Each ``--specialist-prompt`` file holds a direction the user wrote
 for one specialist: its branch opens at PRELUDE's
 root ahead of the opening batch, counted within ``--max-branches``, its specialist sees the text in every launch
 prompt, and the judge neither stops it nor lowers its K for its first judged tests; an empty or unreadable file, or
@@ -90,6 +92,7 @@ import argparse
 import asyncio
 import contextlib
 import io
+import json
 import logging
 import math
 import os
@@ -366,6 +369,17 @@ def _add_specialist_input_options(run: argparse.ArgumentParser) -> None:
         ),
     )
     run.add_argument(
+        "--agent-directions",
+        dest="agent_directions",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            'A directions map, a JSON list of directions or {"directions": [...]} as Arbor\'s component.plan reads it;'
+            " split into disjoint shares, one per Arbor --autonomous-agent, before EXPLORE opens their branches."
+        ),
+    )
+    run.add_argument(
         "--reference",
         dest="references",
         action=REPEATABLE,
@@ -430,6 +444,24 @@ def _agents(sources: list[str], free: int) -> tuple[str, ...]:
         if found and at and (":" in user or scheme.lower() not in SSH_SCHEMES):
             raise ValueError(f"--autonomous-agent {scheme}://... carries credentials; give them in the environment")
     return tuple(sources)
+
+
+def _agent_directions(path: Path | None, agents: list[str]) -> str:
+    """The absolute path of the directions map the Arbor agents split, ``""`` without one; refused with no agent to
+    split it for, or when it holds no directions as Arbor's ``component.plan`` reads them."""
+
+    if path is None:
+        return ""
+    if not agents:
+        raise ValueError("--agent-directions needs an --autonomous-agent to split it for")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"--agent-directions {path} cannot be read: {exc}") from exc
+    directions = document.get("directions") if isinstance(document, dict) else document
+    if not isinstance(directions, list) or not directions:
+        raise ValueError(f"--agent-directions {path} holds no directions")
+    return str(path.absolute())
 
 
 def _user_directions(files: list[Path], max_branches: int) -> tuple[str, ...]:
@@ -506,6 +538,7 @@ def settings_from(
         references=_references(args.references or []),
         dev_leases=args.dev_leases,
         playbook=PlaybookMode(args.playbook),
+        agent_directions=_agent_directions(args.agent_directions, args.agents or []),
     )
 
 

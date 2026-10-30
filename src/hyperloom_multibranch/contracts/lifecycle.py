@@ -40,6 +40,8 @@ class BranchTask:
     direction: str = ""
     agent: str = ""
     deadline: float = 0.0
+    #: The file of an agent branch's share of the session's directions, ``""`` for none.
+    plan: str = ""
 
 
 class SpecialistLifecycle(Protocol):

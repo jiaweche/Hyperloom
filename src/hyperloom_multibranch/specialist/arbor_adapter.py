@@ -52,6 +52,9 @@ CORRECTNESS_SCRIPT = "validator/correctness.sh"
 #: Where MB writes Arbor's configs and keeps its sessions, in Arbor's checkout: a config must be under the checkout,
 #: where Arbor finds its packs from it.
 MB_DIR = "hyperloom-mb"
+#: Where a branch's share of the directions is copied in its checkout, beside its config: the share MB splits off is
+#: under the session, which the branch's sandbox need not see.
+PLAN_FILE = f"{MB_DIR}/plan.json"
 OUTBOX = "keeps"
 #: Arbor gives vLLM its TP itself and SGLang none, which reads it from these flags only.
 SGLANG = "sglang"
@@ -155,6 +158,11 @@ def arbor_manifest(spec: AgentSpec, checkout: ArborCheckout, run: ArborRun) -> A
     if reasons:
         raise ArborRefused(reasons)
     (path / run.session_dir).mkdir(parents=True, exist_ok=True)
+    component = config["component"]
+    if component.get("plan"):
+        carried = path / PLAN_FILE
+        carried.write_bytes(Path(component["plan"]).read_bytes())
+        component["plan"] = str(carried)
     launch = f"{PYTHON} -m arbor run --config {shlex.quote(run.config_file)}"
     return AgentManifest.read(
         {

@@ -256,7 +256,7 @@ async def _attempt(
     source: str, spec: AgentSpec, agent_dir: Path, setup: OnboardingSetup, failures: tuple[str, ...]
 ) -> ReadyAgent:
     checkout = agent_dir / SOURCE_DIR
-    commit = await _fetch(source, checkout)
+    commit = await fetch_source(source, checkout)
     adapted = is_arbor(checkout)
     if adapted:
         try:
@@ -360,7 +360,10 @@ async def _started(
         await setup.sleep(setup.poll_seconds)
 
 
-async def _fetch(source: str, checkout: Path) -> str:
+async def fetch_source(source: str, checkout: Path) -> str:
+    """Clone the agent ``source`` (:func:`split_source`'s form) into ``checkout`` unless it is there, and return the
+    commit it is at; raise :class:`AttemptFailed` with git's words when it cannot."""
+
     if not (checkout / ".git").exists():
         url, ref = split_source(source)
         clone = [GIT, "clone", "--quiet", url, str(checkout)]

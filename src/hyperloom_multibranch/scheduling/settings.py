@@ -119,7 +119,9 @@ class RunSettings:
     them. ``reuse_prelude`` is the earlier
     PRELUDE the run roots on, ``None`` when it runs a child of its own. ``user_directions`` are the directions the user
     wrote, each opening one branch where EXPLORE starts, ahead of the opening batch, within the branch cap; ``agents``
-    the third-party agents the user named, each opening one autonomous branch the same way. ``references`` are the
+    the third-party agents the user named, each opening one autonomous branch the same way, and ``agent_directions``
+    the directions map whose disjoint shares the Arbor agents among them work, one share each (``""`` for none; see
+    :mod:`~hyperloom_multibranch.scheduling.agent_plans`). ``references`` are the
     directories of reference material the run copies in before its first phase, each with the commit it was taken at.
     ``dev_leases`` is how many dev sandboxes the session lends its specialists at once; 0 lends none. ``playbook`` says
     which scheduling playbook the session plays."""
@@ -136,6 +138,7 @@ class RunSettings:
     references: tuple[ReferenceSource, ...] = ()
     dev_leases: int = 0
     playbook: PlaybookMode = PlaybookMode.CHAMPION
+    agent_directions: str = ""
 
 
 __all__ = [

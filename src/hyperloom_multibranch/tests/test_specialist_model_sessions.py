@@ -118,6 +118,19 @@ benchmark:
 """
 
 
+def test_each_agent_s_spec_carries_its_branch_s_share_of_the_directions(tmp_path):
+    agents = _agent_sessions()
+    place = BranchPlace(SimpleNamespace(path=tmp_path / "worktree"), object(), tmp_path / "session")
+    tasks = (BranchTask(agent="arbor", plan="/shares/share-1.json"), BranchTask(agent="arbor"))
+
+    specs = [
+        agents.session(SessionStart(branch, "c0", 1, task), place)._setup.spec
+        for branch, task in zip(("a1", "a2"), tasks)
+    ]
+
+    assert [spec.plan for spec in specs] == ["/shares/share-1.json", None]
+
+
 def test_each_agent_is_given_the_client_the_gate_measures_with_on_its_own_port(tmp_path):
     canonical = tmp_path / "canonical.yaml"
     canonical.write_text(CANONICAL, encoding="utf-8")

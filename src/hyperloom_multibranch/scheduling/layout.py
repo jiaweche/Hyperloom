@@ -33,6 +33,7 @@ REFERENCE_DIR = "MB-reference"
 REPO_DIR = "MB-repo"
 BLOBS_DIR = "MB-blobs"
 BRANCHES_DIR = "MB-branches"
+AGENT_PLANS_DIR = "MB-agent-plans"
 SOURCE_DIR = "MB-source"
 RUNNER_SOURCE_DIR = "MB-runner-source"
 TOOLBOX_DIR = "MB-toolbox"
@@ -119,6 +120,11 @@ class SessionLayout:
     @property
     def branches(self) -> Path:
         return self.root / BRANCHES_DIR
+
+    @property
+    def agent_plans(self) -> Path:
+        """The agent sources fetched to split the session's directions, and the shares (:mod:`.agent_plans`)."""
+        return self.root / AGENT_PLANS_DIR
 
     @property
     def source(self) -> Path:

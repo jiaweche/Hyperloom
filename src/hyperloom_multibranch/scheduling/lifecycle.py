@@ -55,6 +55,7 @@ from hyperloom_multibranch.blackboard.rsi.frontier import FrontierPolicy, Fronti
 from hyperloom_multibranch.blackboard.rsi.playbook import PlaybookChoice, PlaybookPlay, PlaybookPool, session_playbook
 from hyperloom_multibranch.blackboard.rsi.session import FRONTIER_LOG, archived_history
 from hyperloom_multibranch.rulegate.critic import FixReviewer
+from hyperloom_multibranch.scheduling.agent_plans import agent_plans
 from hyperloom_multibranch.scheduling.branches import BranchControl
 from hyperloom_multibranch.scheduling.budget import HardStop, SessionBudget, budget_seconds, explore_gpu_seconds
 from hyperloom_multibranch.scheduling.clock import Clock
@@ -429,6 +430,7 @@ class Session:
                 policy_versions=self._policy_versions(),
             )
         )
+        plans = await agent_plans(self._settings.agents, self._settings.agent_directions, self._layout.agent_plans)
         explore_end = budget.explore_end(self._clock.now(), prelude.longest_root_test)
         self._phase("explore", explore_end=explore_end)
         window = ExploreWindow(
@@ -443,6 +445,7 @@ class Session:
             prelude.child_gpu_seconds_upper_bound,
             self._settings.user_directions,
             self._settings.agents,
+            plans,
         )
         reason = await self._explorer().run(window)
         if reason is SessionStopReason.NO_MEASUREMENT_CARDS:

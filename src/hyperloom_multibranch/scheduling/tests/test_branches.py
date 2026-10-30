@@ -258,6 +258,20 @@ async def test_agent_branches_open_at_the_root_at_k_one_after_the_user_branches_
     assert bench.sessions.started["b02"] == bench.root
     rows = [json.loads(line) for line in (tmp_path / "MB-decisions.jsonl").read_text().splitlines()]
     assert ("b02", "agent branch started") in [(row["branch"], row["reason"]) for row in rows if row["kind"] == "open"]
+    assert bench.sessions.plans == {"b02": ""}
+
+
+async def test_each_agent_branch_starts_on_its_own_share_of_the_directions_in_order(tmp_path: Path) -> None:
+    bench = await Bench(tmp_path).rooted()
+
+    agents = ("/agents/arbor", "/agents/other", "/agents/arbor")
+    await bench.control.open_agent_branches(
+        agents, bench.root, OPEN_BY, ("/shares/share-1.json", "", "/shares/share-2.json")
+    )
+    await _runs_started()
+
+    assert bench.sessions.agents == {"b01": "/agents/arbor", "b02": "/agents/other", "b03": "/agents/arbor"}
+    assert bench.sessions.plans == {"b01": "/shares/share-1.json", "b02": "", "b03": "/shares/share-2.json"}
 
 
 async def test_the_blackboard_records_an_agent_branch_as_autonomous_and_a_user_branch_as_specialist(

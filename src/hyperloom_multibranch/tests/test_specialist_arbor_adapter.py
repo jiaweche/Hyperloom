@@ -24,6 +24,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
     DOSSIER_PASS,
     INSTALL,
     MARKERS,
+    PLAN_FILE,
     ArborCheckout,
     ArborRefused,
     SplitFailed,
@@ -362,11 +363,11 @@ async def test_the_root_s_op_shares_reach_arbor_s_profile_as_mb_writes_them_besi
     assert component["profile"] == str(profile)
     document = json.loads(profile.read_text())
     assert (document["commit"], document["job"], document["shares"]) == (spec.root, "prelude-104393", shares)
-    assert component["plan"] == str(plan) and component["host"] == "hyperloom-mb"
+    assert component["plan"] == str(ready.source_dir.absolute() / PLAN_FILE) and component["host"] == "hyperloom-mb"
     assert component["bench_command"] == bench_command(spec.client) and component["notes"] == spec.knowledge
 
 
-def test_the_branch_s_share_of_the_directions_is_arbor_s_plan(tmp_path: Path) -> None:
+def test_the_branch_s_share_of_the_directions_is_arbor_s_plan_carried_into_its_checkout(tmp_path: Path) -> None:
     plan = tmp_path / "shares" / "share-2.json"
     _write(plan.parent, {plan.name: json.dumps({"directions": [{"id": "m-attn", "kind": "increment", "title": "a"}]})})
     checkout = _write(tmp_path / "checkout", CHECKOUT_FILES)
@@ -375,7 +376,9 @@ def test_the_branch_s_share_of_the_directions_is_arbor_s_plan(tmp_path: Path) ->
         _spec(tmp_path, plan=str(plan)), ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN
     )
 
-    assert manifest.config["component"]["plan"] == str(plan)
+    carried = checkout.absolute() / PLAN_FILE
+    assert manifest.config["component"]["plan"] == str(carried)
+    assert carried.read_text(encoding="utf-8") == plan.read_text(encoding="utf-8")
     assert "profile" not in manifest.config["component"]
 
 

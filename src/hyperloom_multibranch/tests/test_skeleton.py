@@ -1788,6 +1788,32 @@ def _judged_rows(prompt: str) -> dict[str, dict[str, Any]]:
     return {row["branch"]: row for row in state["branches"]}
 
 
+async def test_two_agents_each_start_at_the_root_on_the_share_of_the_session_s_directions_split_after_prelude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The split's own subprocesses are tested with a fake Arbor in scheduling/tests/test_agent_plans.py; here a
+    # stand-in, since real subprocesses would let the virtual clock run past EXPLORE.
+    asked: list[tuple[tuple[str, ...], str, Path]] = []
+
+    async def split(agents: tuple[str, ...], map_file: str, work_dir: Path) -> tuple[str, ...]:
+        asked.append((agents, map_file, work_dir))
+        return ("/shares/share-1.json", "/shares/share-2.json")
+
+    monkeypatch.setattr(lifecycle, "agent_plans", split)
+    stage = _stage(tmp_path, child=child_with_patch(tmp_path))
+    stage.settings = replace(SETTINGS, agents=("/agents/arbor", "/agents/arbor"), agent_directions="/maps/d.json")
+    stage.judge = ScriptedCompletion([])
+
+    outcome = await stage.run()
+
+    assert outcome.stop_reason is SessionStopReason.TIME_EXHAUSTED
+    assert asked == [(("/agents/arbor", "/agents/arbor"), "/maps/d.json", stage.layout.agent_plans)]
+    assert {branch for branch, origin in _origins(stage).items() if origin == "agent"} == {"b01", "b02"}
+    root = await stage.root()
+    assert stage.sessions.started["b01"] == stage.sessions.started["b02"] == root
+    assert stage.sessions.plans == {"b01": "/shares/share-1.json", "b02": "/shares/share-2.json"}
+
+
 USER_DIRECTION = "Fuse the MoE gate into the router kernel."
 
 

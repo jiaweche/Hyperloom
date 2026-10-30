@@ -318,6 +318,36 @@ def test_an_ssh_source_with_a_password_carries_credentials() -> None:
         _settings("--autonomous-agent", "ssh://git:secret@github.com/acme/agent.git")
 
 
+def test_the_agent_directions_map_is_kept_by_its_absolute_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "map.json").write_text(json.dumps({"directions": [{"id": "m-attn", "title": "attention"}]}))
+
+    settings = _settings("--autonomous-agent", "/agents/arbor", "--agent-directions", "map.json")
+
+    assert settings.agent_directions == str(tmp_path / "map.json")
+    assert _settings("--autonomous-agent", "/agents/arbor").agent_directions == ""
+
+
+@pytest.mark.parametrize(
+    ("document", "agent", "match"),
+    [
+        ({"directions": [{"id": "m-attn"}]}, False, "needs an --autonomous-agent"),
+        ({"directions": []}, True, "holds no directions"),
+        ({"map": []}, True, "holds no directions"),
+        (None, True, "cannot be read"),
+    ],
+)
+def test_an_agent_directions_map_without_an_agent_or_directions_is_a_usage_error(
+    tmp_path: Path, document: object, agent: bool, match: str
+) -> None:
+    path = tmp_path / "map.json"
+    path.write_text("{not json" if document is None else json.dumps(document))
+    agents = ["--autonomous-agent", "/agents/arbor"] if agent else []
+
+    with pytest.raises(ValueError, match=match):
+        _settings(*agents, "--agent-directions", str(path))
+
+
 def test_dev_leases_lend_specialists_dev_sandboxes_and_default_to_none() -> None:
     assert _settings().dev_leases == 0
     assert _settings("--dev-leases", "2").dev_leases == 2

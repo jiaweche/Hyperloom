@@ -122,8 +122,9 @@ class ExploreWindow:
     clock times EXPLORE and the budget end at, the session's whole budget, the GPU seconds the session's tests and
     leases may use before EXPLORE ends and the dollars the session's recorded LLM calls may cost (``math.inf`` for no
     limit, for either), the upper bound of the GPU seconds the PRELUDE child used outside a lease, which no limit
-    counts (0 where it ran on leased cards, whose card time the integration branch's progress holds), and the
-    directions the user wrote, one user branch each.
+    counts (0 where it ran on leased cards, whose card time the integration branch's progress holds), the
+    directions the user wrote, one user branch each, the agents the user named, one agent branch each, and in the same
+    order each agent's share of the session's directions (:func:`~.agent_plans.agent_plans`; ``""`` for none).
 
     ``root_commit`` is the session's measurement anchor and nothing moves it. ``start_commit`` is where EXPLORE opens:
     the root, or the Recipe KB champion PRELUDE replayed onto it.
@@ -140,6 +141,7 @@ class ExploreWindow:
     prelude_gpu_seconds_upper_bound: float
     user_directions: tuple[str, ...]
     agents: tuple[str, ...]
+    agent_plans: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -249,7 +251,9 @@ class Explorer:
     async def _open_named(self, window: ExploreWindow) -> None:
         if self._clock.now() < window.explore_end:
             await self._branches.open_user_branches(window.user_directions, window.start_commit, window.explore_end)
-            await self._branches.open_agent_branches(window.agents, window.start_commit, window.explore_end)
+            await self._branches.open_agent_branches(
+                window.agents, window.start_commit, window.explore_end, window.agent_plans
+            )
 
     async def _steer(self, window: ExploreWindow, merging: asyncio.Future[None]) -> SessionStopReason:
         next_judge = self._clock.now() + self._interval
