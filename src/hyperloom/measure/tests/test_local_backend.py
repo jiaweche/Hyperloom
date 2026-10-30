@@ -378,6 +378,20 @@ def test_a_measured_round_that_fails_keeps_the_evaluation_the_warmup_made(grid, 
     assert outcome.returncode == 5
 
 
+def test_a_round_whose_client_could_not_fetch_its_dependencies_is_an_infrastructure_failure(grid, server, tmp_path):
+    """No server started: Magpie's git fetch of the replay client stalled, which says nothing of the candidate (#163)."""
+    stall = (
+        "subprocess.TimeoutExpired: Command ['git', '-C', '/w/InferenceX', 'submodule', 'update', '--init', "
+        "'--recursive', '--', 'inferencex-e2e/utils/aiperf'] timed out after 300 seconds"
+    )
+    grid.answers["warmup"] = grid.result("warmup", status="failed", returncode=1, error=stall, error_class="x")
+
+    outcome = _run(_graded_call(tmp_path))
+
+    assert outcome.failure_class == "infra", outcome.failure_reason
+    assert outcome.failure_reason.startswith("git_fetch_timeout: subprocess.TimeoutExpired")
+
+
 def test_a_graded_test_the_run_stops_during_its_warmup_reports_the_stop_and_measures_nothing(grid, server, tmp_path):
     grid.answers["warmup"] = grid.result(
         "warmup", status="failed", returncode=None, error_class="session_time_exhausted", error="out of time"
@@ -1096,6 +1110,43 @@ def test_a_profile_test_on_a_checkout_that_cannot_be_patched_is_refused_before_a
     assert grid.calls == []
 
 
+def _vllm_profile_point(directory: Path) -> Path:
+    """A vLLM profile point rendered on another host whose vLLM took TraceLens's patch (a hosted app container)."""
+    point = _profile_point(directory)
+    config = yaml.safe_load(point.read_text())
+    config["benchmark"]["framework"] = "vllm"
+    config["benchmark"]["envs"]["EXTRA_VLLM_ARGS"] = (
+        "--profiler-config.capture_torch_profiler True --profiler-config.detailed_trace_annotation True"
+    )
+    point.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return point
+
+
+def test_a_profile_asking_for_patched_profiler_fields_patches_this_hosts_vllm_first(grid, tmp_path, monkeypatch):
+    patched = []
+    monkeypatch.setattr(local, "ensure_vllm_patched_for_tracelens", lambda: patched.append(True) or True)
+    _with_trace(grid)
+
+    _run(_call(tmp_path, _vllm_profile_point(tmp_path), kind="profile"))
+
+    assert patched == [True] and grid.calls, "the server's own vLLM is patched before the rounds run"
+
+
+def test_a_profile_asking_for_patched_profiler_fields_on_an_unpatchable_vllm_is_refused(grid, tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "ensure_vllm_patched_for_tracelens", lambda: False)
+
+    with pytest.raises(TestCallRefused, match="only TraceLens's vLLM patch adds"):
+        _run(_call(tmp_path, _vllm_profile_point(tmp_path), kind="profile"))
+    assert grid.calls == []
+
+
+def test_a_profile_without_those_fields_does_not_touch_vllm(grid, tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "ensure_vllm_patched_for_tracelens", lambda: pytest.fail("vLLM was patched"))
+    _with_trace(grid)
+
+    _run(_call(tmp_path, _profile_point(tmp_path), kind="profile"))
+
+
 def test_a_test_that_does_not_profile_leaves_the_checkout_as_upstream_ships_it(grid, tmp_path):
     root = stock_checkout(tmp_path / "ix")
     config = yaml.safe_load(_point(tmp_path, "p").read_text())
@@ -1425,6 +1476,19 @@ def test_a_failed_round_is_classified_from_the_flag_error_in_its_server_log(grid
 
     assert (outcome.returncode, outcome.failure_class) == (1, "candidate")
     assert outcome.failure_reason == f"serve_flag: {flag_error}"
+
+
+def test_a_round_whose_replay_client_the_hub_refused_is_an_infrastructure_failure(grid, tmp_path):
+    """Board #161: Magpie records only the client's exit code; the Hub's 429 is in agentx_client.log beside server.log."""
+    refusal = "429 Too Many Requests: you have reached your 'api' rate limit."
+    result = _failed_round_with_logs(grid, tmp_path, server_log="INFO waiting for the server to be ready\n")
+    client_log = Path(result.server_log_path).parent / "agentx_client.log"
+    client_log.write_text(f"Fetching 9 files\nhuggingface_hub.errors.HfHubHTTPError: \n\n{refusal}\n", encoding="utf-8")
+    grid.answers["test"] = result
+
+    outcome = _run(_call(tmp_path))
+
+    assert (outcome.failure_class, outcome.failure_reason) == ("infra", f"hub_rate_limited: {refusal}")
 
 
 def test_a_failed_round_is_classified_from_the_refused_request_in_its_benchmark_stderr(grid, tmp_path):

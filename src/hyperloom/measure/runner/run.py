@@ -11,6 +11,7 @@ import importlib.metadata
 import os
 import subprocess
 import time
+import traceback
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ from hyperloom.measure.manifest import encode_manifest, manifest_notes, Manifest
 from hyperloom.measure.phases import (
     BOOTSTRAP,
     ENV_REBUILD,
+    EVAL_DEPS,
     PREFLIGHT,
     RESULT_SIGNING,
     RUNNER_START,
@@ -51,6 +53,7 @@ from hyperloom.measure.jit.native.laying import NamedBuild, NativeLayError, Shee
 from hyperloom.measure.jit.session import JitCacheSession
 from hyperloom.measure.runner import hardware
 from hyperloom.measure.runner.card_watch import BEFORE_TEST, CardWatch
+from hyperloom.measure.runner.eval_deps import EVAL_DEPS_LOG, EvalDepsError, install_eval_deps
 from hyperloom.measure.runner.aiperf_patch import ReplayClientPatchError, patch_replay_client
 from hyperloom.measure.attachments import AttachmentError, place_attachments
 from hyperloom.measure.farm import (
@@ -312,6 +315,27 @@ def _patch_replay_client(ctx: _Context, points: list[Path], inferencex: Path) ->
         )
 
 
+def _install_eval_deps(ctx: _Context, spec: MeasurementSpec, points: list[Path], inferencex: Path) -> None:
+    """Install the accuracy evaluator before the server boots, when the test evaluates through InferenceX's lm-eval.
+
+    In the round it runs on an idle server whose silence the watchdog counts, and only the round's end shows its
+    output (``measure.runner.eval_deps``). A test the evaluator cannot be installed for is not run: its accuracy round
+    could only fail the same way, later.
+    """
+    if not spec.procedure.accuracy or spec.procedure.benchmark_backend != "magpie":
+        return
+    benchmark = (yaml.safe_load(points[0].read_text()) or {}).get("benchmark") or {}
+    if is_magpie_agentx(benchmark):
+        return
+    ctx.phases.begin(EVAL_DEPS)
+    try:  # the round's PATH is this sandbox's (``rewrite_config``), so its python3 is the one installed for
+        note = install_eval_deps(inferencex, environ=ctx.environ, log_path=ctx.files / EVAL_DEPS_LOG)
+    except EvalDepsError as exc:
+        raise RunnerFailure(_START_FAILED, str(exc)) from exc
+    if note:
+        ctx.notes.append(note)
+
+
 def _case_attachments(spec: MeasurementSpec) -> tuple[AttachmentRef, ...]:
     """The attachments a repro test's case is looked for in, as unpacked under ``attach/<id>/``; no other kind has any."""
     if spec.kind != "repro":
@@ -533,6 +557,7 @@ def _run_sheet(ctx: _Context, spec_path: Path, key, progress: Progress) -> None:
     surface = _surface_sha256(spec, points)
     session = _jit_session(ctx, spec, points, farm, facts)
     call = _own_directories(ctx, _call(ctx, spec, points, inferencex, progress), session, farm)
+    _install_eval_deps(ctx, spec, points, inferencex)
     ctx.cards.check(BEFORE_TEST)
     ctx.cards.enforce_guard()
     progress.phase("running")
@@ -645,7 +670,25 @@ def run(
             return failure.exit_code
         except Exception as exc:  # noqa: BLE001 - the application reads status.json, not a traceback
             error_class = DISK_FULL if is_disk_full(exc) else "runner_error"
-            write_status(out_dir, state=_FAILED, error_class=error_class, message=f"{type(exc).__name__}: {exc}")
+            message = f"{type(exc).__name__}: {exc} (at {_raised_at(exc)})"
+            write_status(out_dir, state=_FAILED, error_class=error_class, message=message)
             return 1
         write_status(out_dir, state="succeeded", message=join_notes(ctx.notes))
     return 0
+
+
+#: How many of the innermost frames a runner error names: enough to place a crash the result bundle cannot carry,
+#: since a runner that failed writes no bundle and its own log stays in the ended sandbox.
+_RAISED_AT_FRAMES = 4
+
+
+def _raised_at(exc: BaseException) -> str:
+    """Where ``exc`` was raised: its innermost distinct frames, innermost first, as ``file:line function``."""
+    frames: list[str] = []
+    for frame in reversed(traceback.extract_tb(exc.__traceback__)):
+        where = f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
+        if where not in frames:
+            frames.append(where)
+        if len(frames) == _RAISED_AT_FRAMES:
+            break
+    return " < ".join(frames) or "no frame"
