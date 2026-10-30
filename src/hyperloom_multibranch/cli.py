@@ -183,6 +183,7 @@ DEFAULT_MAX_K_PER_BRANCH = 2
 DEFAULT_JUDGE_INTERVAL_SECONDS = 600.0
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 ENCODING = "utf-8"
+FILE_METAVAR = "FILE"
 log = logging.getLogger(__name__)
 #: The GPU types Magpie has a benchmark script of their own for. ``hyperloom optimize`` runs mi308x and mi325x on
 #: mi300x's script through a mapping its package keeps private, so a session accepts only these until it is public.
@@ -359,10 +360,27 @@ def _add_specialist_input_options(run: argparse.ArgumentParser) -> None:
         action=REPEATABLE,
         type=Path,
         default=None,
-        metavar="FILE",
+        metavar=FILE_METAVAR,
         help="A direction for one specialist; repeatable, each opens one branch where EXPLORE starts, "
         "within --max-branches.",
     )
+    _add_agent_options(run)
+    run.add_argument(
+        "--reference",
+        dest="references",
+        action=REPEATABLE,
+        default=None,
+        metavar="NAME=DIR",
+        help="A directory of reference material the specialists read; repeatable. It is copied to MB-reference/NAME"
+        " before PRELUDE, and the commit its checkout is on is recorded in the manifest. The specialists are briefed on"
+        " leads from InferenceX's reference launches for the workload only when an InferenceX checkout is given as"
+        f" --reference {INFERENCEX_REFERENCE}=DIR; under any other name it is plain reference.",
+    )
+
+
+def _add_agent_options(run: argparse.ArgumentParser) -> None:
+    """The third-party agents some branches run, and what the Arbors among them are given."""
+
     run.add_argument(
         "--autonomous-agent",
         dest="agents",
@@ -379,7 +397,7 @@ def _add_specialist_input_options(run: argparse.ArgumentParser) -> None:
         dest="agent_directions",
         type=Path,
         default=None,
-        metavar="FILE",
+        metavar=FILE_METAVAR,
         help=(
             'A directions map, a JSON list of directions or {"directions": [...]} as Arbor\'s component.plan reads it;'
             " split into disjoint shares, one per Arbor --autonomous-agent, before EXPLORE opens their branches."
@@ -397,23 +415,12 @@ def _add_specialist_input_options(run: argparse.ArgumentParser) -> None:
         dest="agent_launch",
         type=Path,
         default=None,
-        metavar="FILE",
+        metavar=FILE_METAVAR,
         help=(
             "The launch an AgentX recipe's adds to, as Magpie resolves it from InferenceX, for an Arbor"
             " --autonomous-agent: a JSON object of server_flags, server_env, model_name and client"
             " (examples/multibranch-arbor-launch)."
         ),
-    )
-    run.add_argument(
-        "--reference",
-        dest="references",
-        action=REPEATABLE,
-        default=None,
-        metavar="NAME=DIR",
-        help="A directory of reference material the specialists read; repeatable. It is copied to MB-reference/NAME"
-        " before PRELUDE, and the commit its checkout is on is recorded in the manifest. The specialists are briefed on"
-        " leads from InferenceX's reference launches for the workload only when an InferenceX checkout is given as"
-        f" --reference {INFERENCEX_REFERENCE}=DIR; under any other name it is plain reference.",
     )
 
 
