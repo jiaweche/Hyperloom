@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 
 from hyperloom.contracts.recipe import ConfigDelta
-from hyperloom.measure.compile import LocalBlobStore
+from hyperloom.measure.compile import (
+    ComponentLayout,
+    LocalBlobStore,
+    PackageBase,
+    PackageLocator,
+    UnsupportedComponentError,
+)
 from hyperloom_multibranch.blackboard.tests.factories import result
 from hyperloom_multibranch.contracts.blackboard.records import OpShares
 from hyperloom_multibranch.specialist import arbor_adapter
@@ -34,6 +40,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
     bench_command,
     generate_directions,
     is_arbor,
+    link_built,
     mapped,
     read_launch,
     refusals,
@@ -44,6 +51,7 @@ from hyperloom_multibranch.specialist.autonomous_session import AGENT_DIR, MANIF
 from hyperloom_multibranch.specialist.gate_client import GateClient
 from hyperloom_multibranch.specialist.judging import NOTICE
 from hyperloom_multibranch.specialist.runtime import PreflightFailed, SessionCrashed, SessionFinished, SessionRefused
+from hyperloom_multibranch.specialist.worktree import SKIPPED
 from hyperloom_multibranch.tests.test_specialist_agent_onboarding import Onboarder, Process, Sandbox, _setup
 from hyperloom_multibranch.tests.test_specialist_autonomous_session import (
     BRANCH,
@@ -349,6 +357,41 @@ def test_arbor_s_session_is_the_directory_its_manifest_s_snapshots_name(tmp_path
     assert manifest.ledger is not None and manifest.ledger.path == f"{SESSION_DIR}/ledger.jsonl"
     assert (manifest.ledger.kind, manifest.ledger.text) == ("type", "claim")
     assert AgentManifest.read(json.loads(json.dumps(manifest.to_document()))) == manifest
+
+
+def _located(installed: Path) -> PackageLocator:
+    def locate(layout: ComponentLayout) -> PackageBase:
+        return PackageBase(layout.import_name, installed, "vllm", "0.27.1.dev5+gf46a9dfe2")
+
+    return locate
+
+
+def test_the_workspace_is_given_the_installed_framework_s_built_files_and_keeps_them_out_of_its_stage(
+    tmp_path: Path,
+) -> None:
+    files = {"config.py": "max_num_seqs = 64\n", "_C.abi3.so": "elf", "attention/_moe_C.abi3.so": "elf"}
+    installed = _write(tmp_path / "site-packages" / "vllm", {**files, "__pycache__/config.cpython-314.pyc": "pyc"})
+    spec, checkout = _spec(tmp_path), _write(tmp_path / "checkout", CHECKOUT_FILES)
+    workspace = Path(spec.workspace)
+    (workspace / ".git" / "info" / "exclude").write_text("".join(f"{pattern}\n" for pattern in SKIPPED))
+
+    arbor_manifest(spec, ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN, _located(installed))
+
+    assert (workspace / "vllm" / "_C.abi3.so").resolve() == (installed / "_C.abi3.so").resolve()
+    assert (workspace / "vllm" / "attention" / "_moe_C.abi3.so").is_symlink()
+    assert (workspace / "vllm" / "config.py").read_text() == "max_num_seqs = 128\n"
+    assert not (workspace / "vllm" / "__pycache__").exists()
+    assert _git(workspace, "status", "--porcelain") == ""
+    assert link_built(workspace, "vllm", _located(installed)) == 0
+
+
+def test_a_framework_not_installed_or_with_no_layout_links_nothing(tmp_path: Path) -> None:
+    def missing(layout: ComponentLayout) -> PackageBase:
+        raise UnsupportedComponentError(f"package {layout.import_name} is not installed in this image")
+
+    assert link_built(tmp_path, "vllm", missing) == 0
+    assert link_built(tmp_path, "no-such-framework", _located(tmp_path)) == 0
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_arbor_s_install_checks_each_import_it_needs_before_installing_it() -> None:

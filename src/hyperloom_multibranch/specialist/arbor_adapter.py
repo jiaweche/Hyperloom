@@ -35,13 +35,21 @@ import shlex
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from hyperloom.inference_optimizer.framework_registry import EXPERT_PARALLEL_FLAGS
 from hyperloom.inference_optimizer.grid_server_args import merge_server_args, tokenize_server_args_preserving_json
+from hyperloom.measure.compile import (
+    COMPONENT_LAYOUTS,
+    PackageLocator,
+    UnsupportedComponentError,
+    locate_installed_package,
+)
 from hyperloom_multibranch.specialist.agent_manifest import EXIT_FILE, AgentManifest
+from hyperloom_multibranch.specialist.worktree import SKIPPED
 
 if TYPE_CHECKING:
     from hyperloom_multibranch.specialist.agent_onboarding import AgentSpec
@@ -108,6 +116,9 @@ _SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 _OPERATORS = frozenset("();<>|&")
 #: The lines of a command's output a failure keeps, its end.
 _TAIL_LINES = 20
+#: The built files of an installed package, its compiled extensions among them: the source base's (:data:`SKIPPED`)
+#: but its bytecode, which Python writes again.
+BUILT = tuple(pattern for pattern in SKIPPED if pattern.startswith("*.") and pattern not in ("*.pyc", "*.pyo"))
 
 
 class ArborRefused(ValueError):
@@ -194,14 +205,19 @@ def is_arbor(checkout: Path) -> bool:
     return all((checkout / marker).is_file() for marker in MARKERS)
 
 
-def arbor_manifest(spec: AgentSpec, checkout: ArborCheckout, run: ArborRun) -> AgentManifest:
-    """The manifest of ``run`` of Arbor in ``checkout`` for the branch ``spec`` names, its session made; raise
-    :class:`ArborRefused` with every reason Arbor would refuse its config for.
+def arbor_manifest(
+    spec: AgentSpec, checkout: ArborCheckout, run: ArborRun, locator: PackageLocator = locate_installed_package
+) -> AgentManifest:
+    """The manifest of ``run`` of Arbor in ``checkout`` for the branch ``spec`` names, its session made and its
+    workspace given the installed framework's built files (:func:`link_built`, ``locator`` finding the package);
+    raise :class:`ArborRefused` with every reason Arbor would refuse its config for.
 
     The root's op shares are its caller's to add, as the preflight does for every agent run as a component; the
     dossier pass profiles only what they do not cover."""
 
     path = checkout.path.absolute()
+    if Path(spec.workspace).is_dir():
+        link_built(Path(spec.workspace), spec.framework, locator)
     config = arbor_config(spec, path, run)
     reasons = [*_launch_refusals(spec), *refusals(config, checkout.env)]
     if reasons:
@@ -230,6 +246,35 @@ def arbor_manifest(spec: AgentSpec, checkout: ArborCheckout, run: ArborRun) -> A
             "snapshots": {"session": run.session_dir},
         }
     )
+
+
+def link_built(workspace: Path, framework: str, locator: PackageLocator = locate_installed_package) -> int:
+    """Link the built files of ``framework``'s installed package (:data:`BUILT`) into ``workspace``, a branch's
+    worktree, where the package's upstream layout puts them; how many it linked.
+
+    The source base lays the package out without them, and MB's own tests lay a change over the installed package.
+    Arbor serves from its workspace, and a vLLM without its compiled extensions cannot start. A file already there
+    stays, and the base's ``info/exclude`` keeps the links out of every kept change. A framework with no layout, or
+    not installed, links nothing: Arbor refuses at its start a workspace that cannot serve."""
+
+    layout = COMPONENT_LAYOUTS.get(framework)
+    if layout is None:
+        return 0
+    try:
+        package = locator(layout)
+    except UnsupportedComponentError:
+        return 0
+    target, linked = workspace / layout.upstream_prefix, 0
+    for source in package.path.rglob("*"):
+        if "__pycache__" in source.parts or source.is_dir() or not any(fnmatch(source.name, p) for p in BUILT):
+            continue
+        destination = target / source.relative_to(package.path)
+        if os.path.lexists(destination):
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(source, destination)
+        linked += 1
+    return linked
 
 
 def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, Any]:
@@ -562,6 +607,7 @@ async def _directions(checkout: Path, written: tuple[Path, ...], *args: str) -> 
 __all__ = [
     "BLOCK_KEYS",
     "BRANCH_RUN",
+    "BUILT",
     "DOSSIER_PASS",
     "EXIT_REFUSED",
     "INSTALL",
@@ -579,6 +625,7 @@ __all__ = [
     "bench_command",
     "generate_directions",
     "is_arbor",
+    "link_built",
     "mapped",
     "read_launch",
     "refusals",
