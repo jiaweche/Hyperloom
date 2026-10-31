@@ -10,13 +10,17 @@ map is split by Arbor's own command line (:func:`~hyperloom_multibranch.speciali
 into as many disjoint shares as there are Arbor agents, one each, in the order the user named them. Any other agent
 gets none: only Arbor reads a plan.
 
-Without a map, two or more Arbor agents split one Arbor generates from the root's op shares, PRELUDE's profile, with no
-GPU time (:func:`~hyperloom_multibranch.specialist.arbor_adapter.generate_directions`): one direction per op family,
-ranked by its share. A single Arbor gets none and maps its own directions, which its dossier measures better.
+Without a map, two or more Arbor agents split the map of the session's dossier pass (:mod:`~hyperloom_multibranch.
+specialist.dossier_pass`), which the session runs first and passes here as the map (operator, 2026-10-31: the dossier
+pass is the default). When the pass gives none, they split one Arbor generates from the root's shares, PRELUDE's
+profile, with no GPU time (:func:`~hyperloom_multibranch.specialist.arbor_adapter.generate_directions`): one direction
+per op family, ranked by its share. Those shares are the root's op shares, or its kernel shares when TraceLens gave none
+(:mod:`~hyperloom_multibranch.scheduling.root_shares`), as ``shares_source`` says. A single Arbor gets none and maps its
+own directions, which its dossier measures better.
 
 A map that cannot be split, or generated, leaves every branch without a share, as without a map, and the log says why:
 a source that cannot be fetched, no Arbor among the agents, fewer independent directions than Arbor agents, or a root
-with no op shares Arbor can use.
+with no shares Arbor can use.
 """
 
 from __future__ import annotations
@@ -25,7 +29,12 @@ import logging
 from pathlib import Path
 
 from hyperloom_multibranch.contracts.blackboard.records import OpShares
-from hyperloom_multibranch.specialist.agent_onboarding import AttemptFailed, fetch_source, root_profile
+from hyperloom_multibranch.specialist.agent_onboarding import (
+    ROOT_PROFILE_SOURCE,
+    AttemptFailed,
+    fetch_source,
+    root_profile,
+)
 from hyperloom_multibranch.specialist.arbor_adapter import SplitFailed, generate_directions, is_arbor, split_directions
 
 logger = logging.getLogger(__name__)
@@ -36,26 +45,45 @@ SHARES_DIR = "shares"
 GENERATED_MAP = "generated-directions.json"
 #: The fewest Arbor agents a generated map is split for; one Arbor maps its own directions.
 GENERATED_FOR = 2
+#: The ``PRELUDE`` decisions of the session's agent map, as the lifecycle records them: the root's shares as it waited
+#: for and read them, a source that could not be fetched, and the dossier pass skipped, started and ended.
+ROOT_SHARES_READ = "agent map: root shares read"
+AGENT_SOURCES_UNREAD = "agent map: an agent source cannot be fetched"
+DOSSIER_SKIPPED = "agent map: no dossier pass"
+DOSSIER_STARTED = "agent map: dossier pass started"
+DOSSIER_ENDED = "agent map: dossier pass ended"
+
+
+async def arbor_agents(agents: tuple[str, ...], work_dir: Path) -> dict[int, Path]:
+    """The Arbor agents among ``agents``: each one's index and its checkout, each distinct source fetched once under
+    ``work_dir``; raise :class:`~hyperloom_multibranch.specialist.agent_onboarding.AttemptFailed` or ``OSError`` when a
+    source cannot be fetched."""
+
+    checkouts = await _checkouts(agents, work_dir / SOURCES_DIR)
+    return {index: path for index, agent in enumerate(agents) if (path := checkouts[agent]) is not None}
 
 
 async def agent_plans(
-    agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None
+    agents: tuple[str, ...],
+    map_file: str,
+    work_dir: Path,
+    root_shares: OpShares | None = None,
+    shares_source: str = ROOT_PROFILE_SOURCE,
 ) -> tuple[str, ...]:
     """Each of ``agents``' share of the directions in ``map_file``, or, without one, of a map generated from
-    ``root_shares`` for two or more Arbors, in order: the absolute path of an Arbor agent's share, ``""`` for any other
-    agent, and every one ``""`` when there is no map or it cannot be split. ``work_dir`` keeps the fetched sources, a
-    generated map and the shares."""
+    ``root_shares`` (which came from ``shares_source``) for two or more Arbors, in order: the absolute path of an Arbor
+    agent's share, ``""`` for any other agent, and every one ``""`` when there is no map or it cannot be split.
+    ``work_dir`` keeps the fetched sources, a generated map and the shares."""
 
     none = ("",) * len(agents)
     generating = not map_file and root_shares is not None and len(agents) >= GENERATED_FOR
     if not agents or not (map_file or generating):
         return none
     try:
-        checkouts = await _checkouts(agents, work_dir / SOURCES_DIR)
+        arbors = await arbor_agents(agents, work_dir)
     except (AttemptFailed, OSError) as exc:
         logger.error("the agents' directions are not split: an agent source cannot be fetched: %s", exc)
         return none
-    arbors = {index: path for index, agent in enumerate(agents) if (path := checkouts[agent]) is not None}
     if generating and len(arbors) < GENERATED_FOR:
         logger.info("no directions map is generated: %d Arbor agents, each maps its own", len(arbors))
         return none
@@ -63,7 +91,7 @@ async def agent_plans(
         logger.error("the agents' directions are not split: no agent named is Arbor")
         return none
     try:
-        shares = await _split(next(iter(arbors.values())), map_file, root_shares, len(arbors), work_dir)
+        shares = await _split(next(iter(arbors.values())), map_file, root_shares, shares_source, len(arbors), work_dir)
     except SplitFailed as exc:
         logger.error("the agents' directions are not split: %s", exc)
         return none
@@ -75,14 +103,15 @@ async def agent_plans(
 
 
 async def _split(
-    arbor: Path, map_file: str, root_shares: OpShares | None, shares: int, work_dir: Path
+    arbor: Path, map_file: str, root_shares: OpShares | None, source: str, shares: int, work_dir: Path
 ) -> tuple[Path, ...]:
-    """``map_file``, or a map ``arbor`` generates from ``root_shares`` without one, split into ``shares`` plans."""
+    """``map_file``, or a map ``arbor`` generates from ``root_shares`` (from ``source``) without one, split into
+    ``shares`` plans."""
 
     if not map_file:
-        profile = root_profile(root_shares, work_dir)
+        profile = root_profile(root_shares, work_dir, source)
         if profile is None:
-            raise SplitFailed("the root has no op shares to generate a map from")
+            raise SplitFailed("the root has no shares to generate a map from")
         map_file = str(await generate_directions(arbor, profile, work_dir / GENERATED_MAP))
     out = work_dir / SHARES_DIR
     out.mkdir(parents=True, exist_ok=True)

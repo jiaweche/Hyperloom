@@ -239,10 +239,11 @@ class _ChildRun:
 
 @dataclass(frozen=True)
 class _SettledRoot:
-    """What the finished child gives the root: the session profile and the GPU-time bound."""
+    """What the finished child gives the root: the session profile, the GPU-time bound and the root profile's job."""
 
     profile: SessionProfile
     child_gpu_seconds: float
+    root_profile_job: str = ""
 
 
 @dataclass(frozen=True)
@@ -258,7 +259,8 @@ class PreludeResult:
     """The root commit the session is anchored on and the commit EXPLORE opens on, the profile it runs on, the Recipe
     KB's leads for it, the upper bound of the GPU seconds the main-flow child used outside a lease (0 where it ran on
     leased cards, whose card time the blackboard charges the integration branch, or where none was started) and the
-    longest wall time, in seconds, of the root tests the baseline anchored on; the rest is in the blackboard and
+    longest wall time, in seconds, of the root tests the baseline anchored on, and the toolbox's job of the root's
+    profile (``""`` when none was started), which PRELUDE need not wait for; the rest is in the blackboard and
     ``MB-prelude/``."""
 
     root_commit: str
@@ -267,6 +269,7 @@ class PreludeResult:
     warm_leads: tuple[WarmLead, ...]
     child_gpu_seconds_upper_bound: float
     longest_root_test: float
+    root_profile_job: str = ""
 
 
 def prelude_argv(workload: Workload, max_hours: float, launch_info: Path) -> tuple[str, ...]:
@@ -426,11 +429,13 @@ class Prelude:
         replayed = asyncio.ensure_future(self._replay(opened, baseline))
         await together(baseline, profiled, replayed)
         leads, start = replayed.result().warm_leads, replayed.result().start_commit
-        return PreludeResult(opened.commit, start, opened.profile, leads, 0.0, baseline.result())
+        return PreludeResult(opened.commit, start, opened.profile, leads, 0.0, baseline.result(), profiled.result())
 
-    async def _profile_root_commit(self, root: str) -> None:
+    async def _profile_root_commit(self, root: str) -> str:
+        """Profile ``root`` and record how; the job that analysed the profile, ``""`` when none did."""
         outcome = await self._profile_root(root)
         self._decisions.record(Decision(DecisionKind.PROFILE, outcome.reason, detail=outcome.detail))
+        return str(outcome.detail.get("job_id") or "")
 
     async def reuse(self, earlier: ReusedPrelude, workload: Workload, base_image_digest: str) -> PreludeResult:
         """Root the session as :meth:`root` does, on the child session of ``earlier``, without starting a child: the
@@ -539,8 +544,8 @@ class Prelude:
             )
         )
         self._child_baseline = (artifacts.baseline_run, artifacts.baseline_run_refusal)
-        await self._start_root_profile(root, artifacts.profile)
-        return _SettledRoot(profile, child_gpu_seconds)
+        job = await self._start_root_profile(root, artifacts.profile)
+        return _SettledRoot(profile, child_gpu_seconds, job)
 
     async def _replay(self, opened: _OpenedRoot, anchored: Awaitable[object]) -> _Replayed:
         """Read the warm-start leads and replay the best champion among them on the root, judged once ``anchored``
@@ -552,13 +557,14 @@ class Prelude:
             return _Replayed(leads, opened.commit)
         return _Replayed(leads, await self._replay_champion(champion, opened.commit, anchored))
 
-    async def _start_root_profile(self, root: str, profile: ChildProfile | None) -> None:
+    async def _start_root_profile(self, root: str, profile: ChildProfile | None) -> str:
         """Start the toolbox's TraceLens report of the child's ``profile`` for the ``root`` commit, without waiting for
-        it; a ``PRELUDE`` decision names the job, or why none was started."""
+        it, and return its job, ``""`` when none was started; a ``PRELUDE`` decision names the job, or why none was
+        started."""
 
         if profile is None:
             self._root_profile_not_started({"reason": "the child left no roofline profile"})
-            return
+            return ""
         detail = {"source_id": profile.run_id, "trace_dir": str(profile.trace_dir)}
         try:
             copy = await asyncio.to_thread(self._copy_profile, profile)
@@ -567,13 +573,14 @@ class Prelude:
             )
         except OSError as exc:
             self._root_profile_not_started({**detail, "reason": f"cannot copy the profile into the session: {exc}"})
-            return
+            return ""
         except RequestRejected as exc:
             self._root_profile_not_started({**detail, "code": exc.code, "reason": exc.reason})
-            return
+            return ""
         self._decisions.record(
             Decision(DecisionKind.PRELUDE, ROOT_PROFILE_STARTED, INTEGRATION_BRANCH, {**detail, "job_id": job})
         )
+        return job
 
     def _root_profile_not_started(self, detail: dict[str, str]) -> None:
         self._decisions.record(Decision(DecisionKind.PRELUDE, ROOT_PROFILE_NOT_STARTED, INTEGRATION_BRANCH, detail))
@@ -850,6 +857,7 @@ def _result(opened: _OpenedRoot, settled: _SettledRoot, replayed: _Replayed, lon
         replayed.warm_leads,
         settled.child_gpu_seconds,
         longest_root_test,
+        settled.root_profile_job,
     )
 
 

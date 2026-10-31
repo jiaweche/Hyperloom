@@ -11,7 +11,10 @@ import pytest
 from hyperloom.measure.compile import PackageBase
 from hyperloom.sandbox import SandboxGone
 from hyperloom_multibranch.contracts.toolbox import BranchLease
+from hyperloom_multibranch.specialist import agent_sessions
 from hyperloom_multibranch.specialist.agent_onboarding import AgentSpec
+from hyperloom_multibranch.specialist.arbor_adapter import MAPPED
+from hyperloom_multibranch.specialist.dossier_pass import DossierOutcome, DossierSetup, DossierStart
 from hyperloom_multibranch.specialist.agent_sessions import (
     AgentSessions,
     LocalAgentSandboxes,
@@ -129,6 +132,27 @@ def test_each_agent_s_spec_carries_its_branch_s_share_of_the_directions(tmp_path
     ]
 
     assert [spec.plan for spec in specs] == ["/shares/share-1.json", None]
+
+
+async def test_the_dossier_pass_runs_on_a_port_block_of_its_own_and_its_dossier_reaches_later_branches(
+    tmp_path, monkeypatch
+):
+    agents = _agent_sessions()
+    place = BranchPlace(SimpleNamespace(path=tmp_path / "worktree"), object(), tmp_path / "session")
+    ran: list[DossierSetup] = []
+
+    async def run(start: DossierStart, setup: DossierSetup) -> DossierOutcome:
+        ran.append(setup)
+        return DossierOutcome(tmp_path / "directions.json", tmp_path / "docs" / "dossier" / "qwen3-8b", MAPPED)
+
+    monkeypatch.setattr(agent_sessions, "run_dossier_pass", run)
+    outcome = await agents.dossier_pass(DossierStart("arbor", "c0", 1.0), lambda: place)
+    spec = agents.session(SessionStart("a1", "c0", 1, BranchTask(agent="arbor")), place)._setup.spec
+
+    assert outcome.reason == MAPPED
+    [setup] = ran
+    assert (setup.spec.port, setup.agent_dir) == (31100, tmp_path / "session" / "agent")
+    assert (spec.port, spec.dossier) == (31110, str(tmp_path / "docs" / "dossier" / "qwen3-8b"))
 
 
 def test_each_agent_is_given_the_client_the_gate_measures_with_on_its_own_port(tmp_path):

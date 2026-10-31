@@ -16,7 +16,9 @@ would write the same config, so a refusal, this side's or Arbor's own, fails the
 The spec's ``plan``, the file of the branch's share of the session's directions, becomes ``component.plan``. Those
 shares come from one map, which Arbor's dossier pass writes on one lease before the branches open
 (:data:`DOSSIER_PASS`, its end read by :func:`mapped`) or Arbor generates from the root's profile with no GPU time
-(:func:`generate_directions`), split by Arbor's own command line (:func:`split_directions`); the scheduling calls these. The root's op shares are not the adapter's: the preflight sets
+(:func:`generate_directions`), split by Arbor's own command line (:func:`split_directions`); the scheduling calls these.
+The dossier the pass wrote (:func:`pass_dossier`) is copied into each branch's checkout (:func:`carry_dossier`), where
+Arbor looks a dossier up. The root's op shares are not the adapter's: the preflight sets
 ``component.profile`` for Arbor as for any agent run as a component
 (:func:`~hyperloom_multibranch.specialist.agent_onboarding.component_config`).
 
@@ -32,11 +34,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -92,6 +95,10 @@ EXIT_REFUSED = 2
 #: The exit reason of a dossier pass that set its map, and the map's file in its session.
 MAPPED = "mapped"
 MAP_FILE = "directions.json"
+#: Where Arbor's dossier skill writes a dossier in its checkout and looks one up: a directory per dossier, with its
+#: index. Arbor ships dossiers of its own there, which git tracks.
+DOSSIER_DIR = "docs/dossier"
+DOSSIER_INDEX = "README.md"
 #: The keys of Arbor's component block; another is refused.
 BLOCK_KEYS = (
     "host",
@@ -218,6 +225,8 @@ def arbor_manifest(
     path = checkout.path.absolute()
     if Path(spec.workspace).is_dir():
         link_built(Path(spec.workspace), spec.framework, locator)
+    if spec.dossier:
+        carry_dossier(path, Path(spec.dossier))
     config = arbor_config(spec, path, run)
     reasons = [*_launch_refusals(spec), *refusals(config, checkout.env)]
     if reasons:
@@ -275,6 +284,31 @@ def link_built(workspace: Path, framework: str, locator: PackageLocator = locate
         os.symlink(source, destination)
         linked += 1
     return linked
+
+
+def carry_dossier(checkout: Path, dossier: Path) -> None:
+    """Copy ``dossier``, the one the session's dossier pass wrote, into ``checkout``'s :data:`DOSSIER_DIR`, where
+    Arbor's dossier skill looks one up: a branch run on a share of the pass's map has no bootstrap round to write its
+    own. One already there stays."""
+
+    target = checkout / DOSSIER_DIR / dossier.name
+    if dossier.is_dir() and not target.exists():
+        shutil.copytree(dossier, target)
+
+
+def pass_dossier(checkout: Path) -> Path | None:
+    """The dossier a dossier pass in ``checkout`` wrote: the newest directory of :data:`DOSSIER_DIR` with an index that
+    git does not track (the ones it tracks are Arbor's own); ``None`` when it wrote none."""
+
+    root = checkout / DOSSIER_DIR
+    if not root.is_dir():
+        return None
+    listed = subprocess.run(["git", "ls-files", "--", DOSSIER_DIR], cwd=checkout, capture_output=True, text=True)
+    depth = len(PurePosixPath(DOSSIER_DIR).parts)
+    tracked = (PurePosixPath(line).parts for line in listed.stdout.splitlines())
+    shipped = {parts[depth] for parts in tracked if len(parts) > depth}
+    written = [path for path in root.iterdir() if path.name not in shipped and (path / DOSSIER_INDEX).is_file()]
+    return max(written, key=lambda path: (path / DOSSIER_INDEX).stat().st_mtime, default=None)
 
 
 def arbor_config(spec: AgentSpec, checkout: Path, run: ArborRun) -> dict[str, Any]:
@@ -608,6 +642,8 @@ __all__ = [
     "BLOCK_KEYS",
     "BRANCH_RUN",
     "BUILT",
+    "DOSSIER_DIR",
+    "DOSSIER_INDEX",
     "DOSSIER_PASS",
     "EXIT_REFUSED",
     "INSTALL",
@@ -623,10 +659,12 @@ __all__ = [
     "arbor_config",
     "arbor_manifest",
     "bench_command",
+    "carry_dossier",
     "generate_directions",
     "is_arbor",
     "link_built",
     "mapped",
+    "pass_dossier",
     "read_launch",
     "refusals",
     "refused_reasons",

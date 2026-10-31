@@ -39,7 +39,7 @@ from hyperloom.common.outside_facts.rule_pack import rule_pack_identity
 from hyperloom.measure.compile import LocalBlobStore
 from hyperloom.measure.versions import socket_versions
 from hyperloom.orchestrator.knowledge.remote_recipe.client import RemoteRecipeClient
-from hyperloom_multibranch.contracts.blackboard import Role, Writer
+from hyperloom_multibranch.contracts.blackboard import INTEGRATION_BRANCH, Role, Writer
 from hyperloom_multibranch.contracts.blackboard.interfaces import UsageSink
 from hyperloom_multibranch.contracts.blackboard.records import ManifestFingerprint, SessionProfile
 from hyperloom_multibranch.contracts.blackboard.vocab import UsageSource
@@ -55,7 +55,16 @@ from hyperloom_multibranch.blackboard.rsi.frontier import FrontierPolicy, Fronti
 from hyperloom_multibranch.blackboard.rsi.playbook import PlaybookChoice, PlaybookPlay, PlaybookPool, session_playbook
 from hyperloom_multibranch.blackboard.rsi.session import FRONTIER_LOG, archived_history
 from hyperloom_multibranch.rulegate.critic import FixReviewer
-from hyperloom_multibranch.scheduling.agent_plans import agent_plans
+from hyperloom_multibranch.scheduling.agent_plans import (
+    AGENT_SOURCES_UNREAD,
+    DOSSIER_ENDED,
+    DOSSIER_SKIPPED,
+    DOSSIER_STARTED,
+    GENERATED_FOR,
+    ROOT_SHARES_READ,
+    agent_plans,
+    arbor_agents,
+)
 from hyperloom_multibranch.scheduling.branches import BranchControl
 from hyperloom_multibranch.scheduling.budget import HardStop, SessionBudget, budget_seconds, explore_gpu_seconds
 from hyperloom_multibranch.scheduling.clock import Clock
@@ -92,6 +101,7 @@ from hyperloom_multibranch.scheduling.prelude import (
 )
 from hyperloom_multibranch.scheduling.processes import ProcessRegistry
 from hyperloom_multibranch.scheduling.reference import copy_references
+from hyperloom_multibranch.scheduling.root_shares import RootShares, root_shares
 from hyperloom_multibranch.scheduling.requests import SessionChecks, SessionTests
 from hyperloom_multibranch.scheduling.roster import QUOTA_POLICY_VERSION, Roster, final_quota
 from hyperloom_multibranch.scheduling.settings import PlaybookMode, RunSettings
@@ -104,6 +114,7 @@ from hyperloom_multibranch.scheduling.stops import (
 )
 from hyperloom_multibranch.scheduling.similarity import BranchSimilarity
 from hyperloom_multibranch.scheduling.widening import Widening
+from hyperloom_multibranch.specialist.agent_onboarding import ROOT_PROFILE_SOURCE, AttemptFailed
 from hyperloom_multibranch.specialist.prompts import prompt_versions
 
 logger = logging.getLogger(__name__)
@@ -208,6 +219,7 @@ class Session:
             peers.reserved,
         )
         self._toolbox = peers.toolbox
+        self._dossier_pass = peers.dossier_pass
         self._briefs = peers.briefs
         self._base_image_digest = peers.base_image_digest
         tests = SessionTests(peers.toolbox, self._clock)
@@ -432,7 +444,7 @@ class Session:
                 policy_versions=self._policy_versions(),
             )
         )
-        plans = await self._agent_plans(prelude.root_commit)
+        plans = await self._agent_plans(prelude)
         explore_end = budget.explore_end(self._clock.now(), prelude.longest_root_test)
         self._phase("explore", explore_end=explore_end)
         window = ExploreWindow(
@@ -457,13 +469,68 @@ class Session:
         await self._stopper.end_exploration(reason)
         return await self._final(candidates, reason)
 
-    async def _agent_plans(self, root_commit: str) -> tuple[str, ...]:
-        """Each agent branch's share of the directions: of the user's map, or of one generated from the op shares of
-        ``root_commit``, PRELUDE's root, for two or more Arbors (:mod:`agent_plans`)."""
+    async def _agent_plans(self, prelude: PreludeResult) -> tuple[str, ...]:
+        """Each agent branch's share of the directions (:mod:`agent_plans`): of the user's map; for two or more Arbors
+        without one, of the dossier pass's map, else of one generated from the root's shares, waited for (its op
+        shares, else its kernel shares); for fewer, none. The time this takes is EXPLORE's."""
 
-        settings = self._settings
-        shares = await self._blackboard.op_shares(root_commit) if settings.agents else None
-        return await agent_plans(settings.agents, settings.agent_directions, self._layout.agent_plans, shares)
+        settings, work = self._settings, self._layout.agent_plans
+        if not settings.agents or settings.agent_directions:
+            return await agent_plans(settings.agents, settings.agent_directions, work)
+        arbors = await self._arbors()
+        if len(arbors) < GENERATED_FOR:
+            return await agent_plans(settings.agents, "", work)
+        read = await root_shares(
+            self._blackboard,
+            self._toolbox,
+            self._clock,
+            self._layout.toolbox,
+            prelude.root_commit,
+            prelude.root_profile_job,
+        )
+        self._decisions.record(Decision(DecisionKind.PRELUDE, ROOT_SHARES_READ, INTEGRATION_BRANCH, read.detail))
+        shares = read.shares
+        source = settings.agents[min(arbors)]
+        map_file = await self._dossier_map(source, prelude.start_commit, shares)
+        if shares is None:
+            return await agent_plans(settings.agents, map_file, work)
+        return await agent_plans(settings.agents, map_file, work, shares.shares, shares.source)
+
+    async def _arbors(self) -> dict[int, Path]:
+        """The Arbor agents of the run, by index; none, recorded, when a source cannot be fetched."""
+
+        try:
+            return await arbor_agents(self._settings.agents, self._layout.agent_plans)
+        except (AttemptFailed, OSError) as exc:
+            detail = {"error": str(exc)}
+            self._decisions.record(Decision(DecisionKind.PRELUDE, AGENT_SOURCES_UNREAD, INTEGRATION_BRANCH, detail))
+            return {}
+
+    async def _dossier_map(self, source: str, start_commit: str, shares: RootShares | None) -> str:
+        """The map of the dossier pass of the Arbor ``source`` on ``start_commit``, given ``shares`` as its profile;
+        ``""`` when it set none, or none ran (no runner, or no minutes for it). Each step is a ``PRELUDE`` decision."""
+
+        from hyperloom_multibranch.specialist.dossier_pass import DossierStart
+
+        minutes = self._settings.agent_dossier_minutes
+        if self._dossier_pass is None or minutes <= 0:
+            detail = {"minutes": minutes, "runner": self._dossier_pass is not None}
+            self._decisions.record(Decision(DecisionKind.PRELUDE, DOSSIER_SKIPPED, INTEGRATION_BRANCH, detail))
+            return ""
+        given = (None, ROOT_PROFILE_SOURCE) if shares is None else (shares.shares, shares.source)
+        start = DossierStart(source, start_commit, self._clock.now() + minutes * 60, *given)
+        detail = {"source": source, "start_commit": start_commit, "minutes": minutes, "profile": given[1]}
+        self._decisions.record(Decision(DecisionKind.PRELUDE, DOSSIER_STARTED, INTEGRATION_BRANCH, detail))
+        try:
+            outcome = await self._dossier_pass(start)
+        except Exception as exc:  # an optional step: the generic map stands in for it
+            logger.exception("the dossier pass crashed")
+            failed = {"reason": f"it crashed: {exc}", "map": "", "dossier": ""}
+            self._decisions.record(Decision(DecisionKind.PRELUDE, DOSSIER_ENDED, INTEGRATION_BRANCH, failed))
+            return ""
+        ended = {"reason": outcome.reason, "map": str(outcome.map or ""), "dossier": str(outcome.dossier or "")}
+        self._decisions.record(Decision(DecisionKind.PRELUDE, DOSSIER_ENDED, INTEGRATION_BRANCH, ended))
+        return "" if outcome.map is None else str(outcome.map)
 
     async def _final_phases(self, candidates: FinalCandidates, ended: SessionStopReason) -> SessionOutcome:
         """FINAL alone over ``candidates``, inside the phases coroutine, so a failure still goes through CLOSE and

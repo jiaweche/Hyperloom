@@ -368,6 +368,7 @@ async def test_the_root_profile_of_the_childs_trace_is_started_right_after_the_r
         "trace_dir": str(trace_dir),
         "job_id": f"prelude:{ROOFLINE_RUN_ID}",
     }
+    assert result.root_profile_job == f"prelude:{ROOFLINE_RUN_ID}"  # for the agents' map, which waits for it
 
 
 async def test_a_refused_root_profile_is_recorded_and_prelude_goes_on(tmp_path: Path) -> None:
@@ -385,7 +386,7 @@ async def test_a_refused_root_profile_is_recorded_and_prelude_goes_on(tmp_path: 
         "profile_without_trace",
         "no *.trace.json* under the trace dir",
     )
-    assert peers.toolbox.root_profiles == []
+    assert peers.toolbox.root_profiles == [] and result.root_profile_job == ""
 
 
 async def test_a_child_without_a_roofline_profile_starts_no_root_profile(tmp_path: Path) -> None:

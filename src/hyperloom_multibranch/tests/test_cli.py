@@ -76,6 +76,7 @@ from hyperloom_multibranch.scheduling.reference import ReferenceSource
 from hyperloom_multibranch.scheduling.tests.checkouts import knowledge_checkout
 from hyperloom_multibranch.scheduling.roster import RosterCaps
 from hyperloom_multibranch.scheduling.settings import (
+    DOSSIER_MINUTES,
     InferenceXShape,
     KernelOptimizer,
     PlaybookMode,
@@ -326,6 +327,13 @@ def test_the_agent_directions_map_is_kept_by_its_absolute_path(tmp_path: Path, m
 
     assert settings.agent_directions == str(tmp_path / "map.json")
     assert _settings("--autonomous-agent", "/agents/arbor").agent_directions == ""
+
+
+def test_the_dossier_pass_has_thirty_minutes_unless_the_run_gives_it_others_and_none_below_zero() -> None:
+    assert _settings("--autonomous-agent", "/agents/arbor").agent_dossier_minutes == DOSSIER_MINUTES == 30.0
+    assert _settings("--agent-dossier-minutes", "0").agent_dossier_minutes == 0.0
+    with pytest.raises(ValueError, match="--agent-dossier-minutes -5 is negative"):
+        _settings("--agent-dossier-minutes", "-5")
 
 
 def test_the_agent_pack_is_kept_by_name_and_empty_without_one() -> None:

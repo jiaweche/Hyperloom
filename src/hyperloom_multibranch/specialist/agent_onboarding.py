@@ -47,6 +47,7 @@ from hyperloom_multibranch.specialist.arbor_adapter import (
     EXIT_REFUSED,
     ArborCheckout,
     ArborRefused,
+    ArborRun,
     arbor_manifest,
     is_arbor,
     refused_reasons,
@@ -71,6 +72,8 @@ SHIM_DIR = "bin"
 TAIL_LINES = 20
 #: The file, in the session of an agent run as a component, that holds the op shares of the session's root profile.
 PROFILE_FILE = "op_shares.json"
+#: What the root's shares are, as the profile file names their source: its op shares, the blackboard's.
+ROOT_PROFILE_SOURCE = "PRELUDE root profile"
 
 DOCKER_SHIM = """#!/usr/bin/env python3
 # Runs `docker exec` and `docker cp` in place, for an agent written to drive a container; the sandbox has no daemon.
@@ -123,11 +126,13 @@ class AgentSpec:
     the session has none to give), ``baseline``, what the gate measured of the metric on the session's root (``None``
     before it did), ``knowledge``, the notes on the integration head the agent reads each iteration, and, for an agent
     run as a component, ``deadline``, the clock time it ends by, ``root``, the commit of ``workspace`` its patches
-    are made against, and ``root_shares``, the op shares of the session root's profile (``None`` when it has none).
-    Arbor (:mod:`arbor_adapter`) is also given ``ep``, the expert-parallel size the workload is served at, and may be
-    given ``plan``, the file of the branch's share of the session's directions, ``pack``, the name of the pack it
-    runs (``None`` for the adapter's default), and ``launch``, the file of the launch the recipe's adds to (``None``
-    when the recipe's is the whole launch); the onboarding model is told none of them."""
+    are made against, and ``root_shares``, the op shares of the session root's profile (``None`` when it has none),
+    which the profile file says came from ``root_shares_source``. Arbor (:mod:`arbor_adapter`) is also given ``ep``,
+    the expert-parallel size the workload is served at, and may be given ``plan``, the file of the branch's share of
+    the session's directions, ``pack``, the name of the pack it runs (``None`` for the adapter's default),
+    ``launch``, the file of the launch the recipe's adds to (``None`` when the recipe's is the whole launch), and
+    ``dossier``, the dossier the session's dossier pass wrote, for its checkout (``None`` without one); the onboarding
+    model is told none of them."""
 
     model: str
     framework: str
@@ -152,6 +157,8 @@ class AgentSpec:
     ep: int = DEFAULT_EP
     pack: str | None = None
     launch: str | None = None
+    dossier: str | None = None
+    root_shares_source: str = ROOT_PROFILE_SOURCE
 
     def to_document(self) -> dict[str, object]:
         return {
@@ -212,8 +219,12 @@ Onboard = Callable[[Path, str], Awaitable[str]]
 
 @dataclass(frozen=True)
 class OnboardingSetup:
+    """``run`` is the run of Arbor the preflight starts, when the agent is Arbor: a branch's, or the session's
+    dossier pass."""
+
     sandbox: AgentSandbox
     onboard: Onboard
+    run: ArborRun = BRANCH_RUN
     attempts: int = ATTEMPTS
     start_seconds: float = START_SECONDS
     install_seconds: float = INSTALL_SECONDS
@@ -292,9 +303,7 @@ async def _attempt(
     adapted = is_arbor(checkout)
     if adapted:
         try:
-            manifest = await asyncio.to_thread(
-                arbor_manifest, spec, ArborCheckout(source, commit, checkout), BRANCH_RUN
-            )
+            manifest = await asyncio.to_thread(arbor_manifest, spec, ArborCheckout(source, commit, checkout), setup.run)
         except ArborRefused as error:
             raise ConfigRefused(f"Arbor would refuse the config written for it: {error}") from error
     else:
@@ -304,7 +313,7 @@ async def _attempt(
         except (ManifestError, ValueError) as error:
             raise AttemptFailed(f"the manifest: {error}") from error
     if manifest.snapshots is not None:
-        profile = root_profile(spec.root_shares, checkout / manifest.snapshots.session)
+        profile = root_profile(spec.root_shares, checkout / manifest.snapshots.session, spec.root_shares_source)
         manifest = replace(manifest, config=component_config(manifest.config, spec, profile))
     (checkout / manifest.config_file).parent.mkdir(parents=True, exist_ok=True)
     (checkout / manifest.config_file).write_text(json.dumps(manifest.config, indent=2), encoding=ENCODING)
@@ -346,14 +355,14 @@ def component_config(config: Mapping[str, object], spec: AgentSpec, profile: Pat
     }
 
 
-def root_profile(shares: OpShares | None, session: Path) -> Path | None:
-    """Write ``shares`` to :data:`PROFILE_FILE` in ``session``, the form Arbor's ``component.profile`` reads; the file,
-    ``None`` with no shares."""
+def root_profile(shares: OpShares | None, session: Path, source: str = ROOT_PROFILE_SOURCE) -> Path | None:
+    """Write ``shares``, which came from ``source``, to :data:`PROFILE_FILE` in ``session``, the form Arbor's
+    ``component.profile`` reads; the file, ``None`` with no shares."""
 
     if shares is None:
         return None
     document = {
-        "source": "PRELUDE root profile",
+        "source": source,
         "commit": shares.commit_id,
         "job": shares.job_id,
         "unit": "percent",

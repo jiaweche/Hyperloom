@@ -373,7 +373,9 @@ def local_peers(host: MeasurementHost, sessions: SpecialistSessions, setup: Peer
     gate_service = GateService(gate_blackboard, toolbox, rule, toolbox)
     regression = RegressionSet(gate_blackboard, runner, repo)
     image, on_this_machine = host.image.digest, host.backend.on_this_machine
-    return Peers(runtime, toolbox, repo, gate_service, mcp, briefs, image, gate, regression, on_this_machine)
+    return Peers(
+        runtime, toolbox, repo, gate_service, mcp, briefs, image, gate, regression, on_this_machine, built.dossier_pass
+    )
 
 
 def _toolbox(

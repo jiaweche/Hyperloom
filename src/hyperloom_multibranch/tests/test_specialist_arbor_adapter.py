@@ -27,6 +27,7 @@ from hyperloom_multibranch.specialist.agent_manifest import REFUSED_FILE, AgentM
 from hyperloom_multibranch.specialist.agent_onboarding import PROFILE_FILE, AgentSpec, make_ready, root_profile
 from hyperloom_multibranch.specialist.arbor_adapter import (
     BRANCH_RUN,
+    DOSSIER_DIR,
     DOSSIER_PASS,
     INSTALL,
     LAUNCH_KEYS,
@@ -383,6 +384,19 @@ def test_the_workspace_is_given_the_installed_framework_s_built_files_and_keeps_
     assert not (workspace / "vllm" / "__pycache__").exists()
     assert _git(workspace, "status", "--porcelain") == ""
     assert link_built(workspace, "vllm", _located(installed)) == 0
+
+
+def test_a_branch_given_the_session_s_dossier_finds_it_in_its_checkout_where_arbor_looks_one_up(
+    tmp_path: Path,
+) -> None:
+    dossier = _write(tmp_path / "pass" / "docs" / "dossier" / "qwen3-8b", {"README.md": "# the pass's\n"})
+    spec, checkout = _spec(tmp_path, dossier=str(dossier)), _write(tmp_path / "checkout", CHECKOUT_FILES)
+
+    arbor_manifest(spec, ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN, _located(tmp_path / "none"))
+    (dossier / "README.md").write_text("# edited after\n")
+    arbor_manifest(spec, ArborCheckout("arbor", "abc123", checkout, {}), BRANCH_RUN, _located(tmp_path / "none"))
+
+    assert (checkout / DOSSIER_DIR / "qwen3-8b" / "README.md").read_text() == "# the pass's\n"  # a copy there stays
 
 
 def test_a_framework_not_installed_or_with_no_layout_links_nothing(tmp_path: Path) -> None:

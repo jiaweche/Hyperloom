@@ -44,15 +44,20 @@ _PATCH: dict[str, Any] = {
 async def sync_to_head(repo: ExperimentRepo, branch: str, worktree: BranchWorktree) -> str:
     """Reset ``worktree`` to ``branch``'s head and return that head."""
     head = await repo.head(branch)
-    recipe = await repo.read_recipe(head)
+    await sync_to_commit(repo, head, worktree)
+    return head
+
+
+async def sync_to_commit(repo: ExperimentRepo, commit: str, worktree: BranchWorktree) -> None:
+    """Reset ``worktree`` to ``commit``: the installed packages with its recipe's patches applied."""
+    recipe = await repo.read_recipe(commit)
     patches = [
-        (await repo.patch_text(head, patch.path)).encode()
+        (await repo.patch_text(commit, patch.path)).encode()
         for component in recipe.components
         if worktree.holds(component.component)
         for patch in component.patches
     ]
-    await asyncio.to_thread(worktree.sync, head, patches)
-    return head
+    await asyncio.to_thread(worktree.sync, commit, patches)
 
 
 def register_worktree_tools(
@@ -147,4 +152,4 @@ def _patch(
     return handle
 
 
-__all__ = ["WorktreeFor", "register_worktree_tools", "sync_to_head"]
+__all__ = ["WorktreeFor", "register_worktree_tools", "sync_to_commit", "sync_to_head"]

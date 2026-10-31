@@ -30,6 +30,7 @@ from hyperloom_multibranch.scheduling.settings import Workload
 
 if TYPE_CHECKING:
     from hyperloom.hosted.mcp_server import McpServer
+    from hyperloom_multibranch.specialist.dossier_pass import DossierPass
     from hyperloom_multibranch.toolbox.toolbox import RealToolbox
 
 
@@ -44,7 +45,8 @@ class Peers:
     the scheduler starts it, and records each fork and repair the scheduler voids. ``regression`` runs the
     regression set the integrator asks for before a merge and FINAL for every candidate. ``on_this_machine`` says
     whether the toolbox measures on this machine's cards, which the PRELUDE child runs on too; PRELUDE starts none
-    where it does not.
+    where it does not. ``dossier_pass`` runs the session's dossier pass before EXPLORE opens its agent branches; a
+    session that runs no agent has none.
     """
 
     lifecycle: SpecialistLifecycle
@@ -57,6 +59,7 @@ class Peers:
     reserved: ReservedBranches
     regression: RegressionCheck
     on_this_machine: bool
+    dossier_pass: DossierPass | None = None
 
 
 @dataclass(frozen=True)

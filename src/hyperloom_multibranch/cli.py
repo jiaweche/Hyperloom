@@ -31,8 +31,10 @@ Each ``--autonomous-agent SOURCE`` opens one branch where EXPLORE starts, after 
 ``--max-branches``, whose specialist runs that third-party agent end to end in a sandbox of its own; a source that
 carries credentials in its URL is a usage error. ``--agent-directions FILE`` names a directions map that is split, after
 PRELUDE, into disjoint shares, one per Arbor agent among them, each its ``component.plan``; a map with no directions, or
-one given with no agent, is a usage error. Without one, two or more Arbors split a map Arbor generates from the root's
-profile. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
+one given with no agent, is a usage error. Without one, two or more Arbors split the map of a dossier pass, the first
+Arbor run once before their branches open for at most ``--agent-dossier-minutes`` (default 30), or, when it gives none
+or the minutes are 0, a map Arbor generates from the root's profile (its op shares, else its kernel shares); a negative
+value is a usage error. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
 serving template; a name that is not one directory, or one given with no agent, is a usage error, and a pack the Arbor
 checkout lacks is refused when the branch starts. ``--agent-launch FILE`` gives those Arbors the launch an AgentX
 recipe's adds to, which Magpie resolves from InferenceX and MB does not carry yet; a file the adapter cannot use, or one
@@ -168,6 +170,7 @@ from hyperloom_multibranch.scheduling.processes import ProcessRegistry, adopting
 from hyperloom_multibranch.scheduling.reference import ReferenceSource, reference_source
 from hyperloom_multibranch.scheduling.roster import RosterCaps
 from hyperloom_multibranch.scheduling.settings import (
+    DOSSIER_MINUTES,
     InferenceXShape,
     KernelOptimizer,
     PlaybookMode,
@@ -403,7 +406,19 @@ def _add_agent_options(run: argparse.ArgumentParser) -> None:
         help=(
             'A directions map, a JSON list of directions or {"directions": [...]} as Arbor\'s component.plan reads it;'
             " split into disjoint shares, one per Arbor --autonomous-agent, before EXPLORE opens their branches."
-            " Default: for two or more Arbors, a map Arbor generates from the root's profile."
+            " Default: for two or more Arbors, the map of a dossier pass (--agent-dossier-minutes), else one Arbor"
+            " generates from the root's profile."
+        ),
+    )
+    run.add_argument(
+        "--agent-dossier-minutes",
+        dest="agent_dossier_minutes",
+        type=float,
+        default=DOSSIER_MINUTES,
+        metavar="MINUTES",
+        help=(
+            "Without --agent-directions, how long the dossier pass that maps two or more Arbor agents' directions may"
+            f" run before their branches open, out of EXPLORE's time; 0 runs none (default {DOSSIER_MINUTES:g})."
         ),
     )
     run.add_argument(
@@ -604,7 +619,14 @@ def settings_from(
         agent_directions=_agent_directions(args.agent_directions, args.agents or []),
         agent_pack=_agent_pack(args.agent_pack, args.agents or []),
         agent_launch=_agent_launch(args.agent_launch, args.agents or []),
+        agent_dossier_minutes=_dossier_minutes(args.agent_dossier_minutes),
     )
+
+
+def _dossier_minutes(minutes: float) -> float:
+    if minutes < 0:
+        raise ValueError(f"--agent-dossier-minutes {minutes:g} is negative; 0 runs no dossier pass")
+    return minutes
 
 
 def require_workload_switch(workload: Workload, env: Mapping[str, str]) -> None:

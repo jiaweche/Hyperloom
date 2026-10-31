@@ -18,6 +18,8 @@ from hyperloom_multibranch.scheduling.roster import RosterCaps
 
 #: FINAL's sweep concs as multiples of an InferenceX workload's conc; the primary operating point is one of them.
 SWEEP_FACTORS = (0.5, 1.0, 2.0)
+#: How long the dossier pass that maps two or more Arbors' directions may run, unless the run says otherwise.
+DOSSIER_MINUTES = 30.0
 
 
 def sweep_concs(conc: int) -> tuple[int, ...]:
@@ -122,8 +124,10 @@ class RunSettings:
     the third-party agents the user named, each opening one autonomous branch the same way, and ``agent_directions``
     the directions map whose disjoint shares the Arbor agents among them work, one share each (``""`` for none; see
     :mod:`~hyperloom_multibranch.scheduling.agent_plans`), ``agent_pack`` the pack those Arbors run (``""`` for
-    the adapter's default, Arbor's serving template), and ``agent_launch`` the file of the launch their recipe's adds
-    to (``""`` when the recipe's is the whole launch). ``references`` are the
+    the adapter's default, Arbor's serving template), ``agent_launch`` the file of the launch their recipe's adds
+    to (``""`` when the recipe's is the whole launch), and ``agent_dossier_minutes`` how long the dossier pass that
+    maps two or more Arbors' directions may run when no map is given (0: none, the map is generated from the root's
+    shares; :mod:`~hyperloom_multibranch.specialist.dossier_pass`). ``references`` are the
     directories of reference material the run copies in before its first phase, each with the commit it was taken at.
     ``dev_leases`` is how many dev sandboxes the session lends its specialists at once; 0 lends none. ``playbook`` says
     which scheduling playbook the session plays."""
@@ -143,9 +147,11 @@ class RunSettings:
     agent_directions: str = ""
     agent_pack: str = ""
     agent_launch: str = ""
+    agent_dossier_minutes: float = DOSSIER_MINUTES
 
 
 __all__ = [
+    "DOSSIER_MINUTES",
     "SWEEP_FACTORS",
     "InferenceXShape",
     "KernelOptimizer",

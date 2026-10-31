@@ -11,6 +11,10 @@ environment on top of the session's, or, on the hosted backend, in the leased ``
 (:mod:`agent_onboard`) with its spend recorded in the branch's blackboard, where the agent's own spend goes too, read
 from the transcripts of the Claude CLI's directory the sandbox gives the agent (:mod:`agent_spend`). Given the gate's
 benchmark client (:mod:`gate_client`), each agent's spec names it aimed at the branch's first port.
+
+The session's dossier pass (:mod:`dossier_pass`) runs on the same: a port block of its own, a sandbox of a lease, a
+worktree and a directory beside the branches', under :data:`~.dossier_pass.DOSSIER_HOLDER`. The dossier it writes is
+given to every agent branch built after it, which copies it into its checkout.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Protocol
 
@@ -31,10 +36,18 @@ from hyperloom_multibranch.specialist.agent_sandbox import LocalAgentSandbox
 from hyperloom_multibranch.specialist.agent_session import AgentCommand, BranchPlace, Processes, SessionBlackboard
 from hyperloom_multibranch.specialist.agent_spend import AgentSpend
 from hyperloom_multibranch.specialist.autonomous_session import AGENT_DIR, AutonomousSession, AutonomousSetup
+from hyperloom_multibranch.specialist.dossier_pass import (
+    DOSSIER_HOLDER,
+    DossierOutcome,
+    DossierSetup,
+    DossierStart,
+    run_dossier_pass,
+)
 from hyperloom_multibranch.specialist.gate_client import GateClient
 from hyperloom_multibranch.specialist.model_sessions import ModelSessions, branch_place
 from hyperloom_multibranch.specialist.remote_sandbox import RemoteAgentSandbox, claude_config_dir, forwarded_env
 from hyperloom_multibranch.specialist.runtime import Session, SessionStart
+from hyperloom_multibranch.specialist.worktree import WorktreeError
 from hyperloom_multibranch.toolbox.hosted_leases import HostedBranchLease
 
 if TYPE_CHECKING:
@@ -104,7 +117,7 @@ class AgentSessions:
     start commit's arguments and the workspace are each branch's own); the onboarding ``command`` and its ``env``; the
     ``toolbox`` the sandboxes are leased from and imports go to, and the ``repo`` they are read against; the
     ``sandboxes`` the agents run in; and ``client``, the gate's benchmark client, ``None`` when the session has none to
-    give."""
+    give. ``dossier`` is the dossier the session's dossier pass wrote, once it has."""
 
     spec: AgentSpec
     command: AgentCommand
@@ -113,22 +126,17 @@ class AgentSessions:
     repo: ExperimentRepo
     sandboxes: AgentSandboxes
     client: GateClient | None = None
+    dossier: str | None = field(default=None, init=False)
     _taken: dict[str, int] = field(default_factory=dict, init=False)
 
     def session(self, start: SessionStart, place: BranchPlace) -> AutonomousSession:
         """The run of the agent of ``start``'s branch, in ``place``, with the branch's share of the session's
-        directions when it has one."""
+        directions when it has one, and the session's dossier when its dossier pass wrote one."""
 
         branch, component = start.branch, self.spec.framework
-        index = self._taken.setdefault(branch, len(self._taken))
-        port = self.spec.port + index * PORTS_PER_AGENT
-        client = "" if self.client is None else self.client.command(port, place.workspace / AGENT_DIR / BENCH_DIR)
-        spec = replace(self.spec, port=port, client=client, plan=start.task.plan or None)
-        source = place.worktree.path / PurePosixPath(COMPONENT_LAYOUTS[component].upstream_prefix).parent
+        spec = replace(self._placed(branch, place), plan=start.task.plan or None, dossier=self.dossier)
         onboard = cli_onboard(self.command, self.env, branch, place.blackboard)
-
-        def sandbox(lease: BranchLease) -> AgentSandbox:
-            return self.sandboxes.sandbox(branch, place, source, lease)
+        sandbox = self._sandbox(branch, place)
 
         def onboarding(agent_sandbox: AgentSandbox) -> OnboardingSetup:
             return OnboardingSetup(agent_sandbox, onboard)
@@ -139,6 +147,41 @@ class AgentSessions:
 
         setup = AutonomousSetup(onboarding, sandbox, spec, self.toolbox, self.repo, component, spend)
         return AutonomousSession(start, setup, place)
+
+    async def dossier_pass(self, start: DossierStart, place: Callable[[], BranchPlace]) -> DossierOutcome:
+        """Run the session's dossier pass of ``start`` in the place ``place`` makes when it starts, and keep the
+        dossier it wrote for the branches built after it."""
+
+        try:
+            here = place()
+        except (WorktreeError, OSError) as error:
+            return DossierOutcome(None, None, f"its worktree could not be made: {error}")
+        spec, sandbox = self._placed(DOSSIER_HOLDER, here), self._sandbox(DOSSIER_HOLDER, here)
+        setup = DossierSetup(spec, self.repo, self.toolbox, sandbox, here.worktree, here.workspace / AGENT_DIR)
+        outcome = await run_dossier_pass(start, setup)
+        if outcome.dossier is not None:
+            self.dossier = str(outcome.dossier)
+        return outcome
+
+    def _placed(self, holder: str, place: BranchPlace) -> AgentSpec:
+        """The session's spec with ``holder``'s port block, which it keeps for the session, and the gate's client
+        aimed at its first port."""
+
+        index = self._taken.setdefault(holder, len(self._taken))
+        port = self.spec.port + index * PORTS_PER_AGENT
+        client = "" if self.client is None else self.client.command(port, place.workspace / AGENT_DIR / BENCH_DIR)
+        return replace(self.spec, port=port, client=client)
+
+    def _sandbox(self, holder: str, place: BranchPlace) -> Callable[[BranchLease], AgentSandbox]:
+        """The sandbox of a lease for ``holder`` in ``place``, the framework's source in its worktree imported first."""
+
+        layout = COMPONENT_LAYOUTS[self.spec.framework]
+        source = place.worktree.path / PurePosixPath(layout.upstream_prefix).parent
+
+        def sandbox(lease: BranchLease) -> AgentSandbox:
+            return self.sandboxes.sandbox(holder, place, source, lease)
+
+        return sandbox
 
 
 def with_agents(
@@ -154,11 +197,15 @@ def with_agents(
     def factory(start: SessionStart) -> Session:
         if not start.task.agent:
             return sessions.factory(start)
-        branch = start.branch
-        place = branch_place(sessions.worktrees(branch), blackboard_for(branch), branch_dir(branch))
-        return agents.session(start, place)
+        return agents.session(start, placed(start.branch))
 
-    return ModelSessions(factory, sessions.worktrees)
+    def placed(holder: str) -> BranchPlace:
+        return branch_place(sessions.worktrees(holder), blackboard_for(holder), branch_dir(holder))
+
+    async def dossier_pass(start: DossierStart) -> DossierOutcome:
+        return await agents.dossier_pass(start, partial(placed, DOSSIER_HOLDER))
+
+    return ModelSessions(factory, sessions.worktrees, dossier_pass)
 
 
 __all__ = [

@@ -7,7 +7,8 @@ A session has one source base, laid out from the installed packages of ``compone
 resumed session finds it in place), and each branch a worktree and a workspace under its directory. ``factory`` gives
 the runtime an :class:`AgentSession` per run of a branch's specialist, and refuses a branch that runs a third-party
 agent (:func:`~hyperloom_multibranch.specialist.agent_sessions.with_agents` runs those); ``worktrees`` is what the
-worktree tools serve, so a specialist's tools and its sessions edit the same tree.
+worktree tools serve, so a specialist's tools and its sessions edit the same tree. ``dossier_pass`` runs the session's
+dossier pass, when the session runs agents (``None`` otherwise).
 """
 
 from __future__ import annotations
@@ -15,11 +16,15 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hyperloom_multibranch.specialist.agent_session import AgentSession, AgentSetup, BranchPlace, SessionBlackboard
 from hyperloom_multibranch.specialist.runtime import SessionFactory, SessionStart
 from hyperloom_multibranch.specialist.tools import WorktreeFor
 from hyperloom_multibranch.specialist.worktree import BranchWorktree, SourceBase
+
+if TYPE_CHECKING:
+    from hyperloom_multibranch.specialist.dossier_pass import DossierPass
 
 WORKTREE_DIR = "worktree"
 SESSION_DIR = "session"
@@ -29,6 +34,7 @@ SESSION_DIR = "session"
 class ModelSessions:
     factory: SessionFactory
     worktrees: WorktreeFor
+    dossier_pass: DossierPass | None = None
 
 
 def model_sessions(

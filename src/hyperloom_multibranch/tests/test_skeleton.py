@@ -189,7 +189,16 @@ from hyperloom_multibranch.tests.fakes import RecordingVerifier
 from hyperloom_multibranch.toolbox.attempts import TestJob
 from hyperloom_multibranch.toolbox.fake_model import DEFAULT_BASELINE
 from hyperloom_multibranch.toolbox.tools.base import JobStatus
+from hyperloom_multibranch.scheduling.agent_plans import (
+    DOSSIER_ENDED,
+    DOSSIER_SKIPPED,
+    DOSSIER_STARTED,
+    ROOT_SHARES_READ,
+)
+from hyperloom_multibranch.scheduling.settings import DOSSIER_MINUTES
+from hyperloom_multibranch.specialist.arbor_adapter import MAPPED
 from hyperloom_multibranch.specialist.directions import DIRECTIONS
+from hyperloom_multibranch.specialist.dossier_pass import DossierOutcome, DossierPass, DossierStart
 from hyperloom_multibranch.specialist.prompts import prompt_versions
 from hyperloom_multibranch.specialist.runtime import MAX_LOSS_RESTARTS, SessionCrashed
 
@@ -391,6 +400,7 @@ class Stage:
     author: ScriptedCompletion = field(default_factory=ScriptedCompletion)
     learnings: LearningRecall | None = None
     image_check: Callable[[], ImageCheckReport] = lambda: IMAGE_CHECK
+    dossier_pass: DossierPass | None = None
     toolbox: RecordingToolbox = field(init=False)
     sessions: RecordedSessions = field(init=False)
     repo: HeldGitRepo = field(init=False)
@@ -451,7 +461,17 @@ class Stage:
         )
         digest = toolbox.config.image_digest
         return Peers(
-            runtime, toolbox, repo, gate, mcp, self.briefs, digest, self.gate, self.regression, self.on_this_machine
+            runtime,
+            toolbox,
+            repo,
+            gate,
+            mcp,
+            self.briefs,
+            digest,
+            self.gate,
+            self.regression,
+            self.on_this_machine,
+            self.dossier_pass,
         )
 
     async def root(self) -> str:
@@ -1798,7 +1818,7 @@ async def test_two_agents_each_start_at_the_root_on_the_share_of_the_session_s_d
     given: list[OpShares | None] = []
 
     async def split(
-        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None
+        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None, *_source: str
     ) -> tuple[str, ...]:
         asked.append((agents, map_file, work_dir))
         given.append(root_shares)
@@ -1818,6 +1838,7 @@ async def test_two_agents_each_start_at_the_root_on_the_share_of_the_session_s_d
     assert given == [await stage.handle(Role.OBSERVER).op_shares(root)]
     assert stage.sessions.started["b01"] == stage.sessions.started["b02"] == root
     assert stage.sessions.plans == {"b01": "/shares/share-1.json", "b02": "/shares/share-2.json"}
+    assert _agent_map(stage) == []  # a given map: no shares waited for and no dossier pass
 
 
 #: Two agents' keeps, each a gain alone and more together: ``a1`` and ``a2`` both land on the integration branch.
@@ -1834,11 +1855,12 @@ async def test_two_agents_started_on_their_shares_both_have_their_keeps_merged_i
 ) -> None:
     # The operator's first work item (plan, two Arbors, merge), with each agent's keep as its branch's scripted change.
     async def split(
-        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None
+        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None, *_source: str
     ) -> tuple[str, ...]:
         return ("/shares/share-1.json", "/shares/share-2.json")
 
     monkeypatch.setattr(lifecycle, "agent_plans", split)
+    monkeypatch.setattr(lifecycle, "arbor_agents", _two_arbors)
     stage = _stage(tmp_path, child=child_with_patch(tmp_path))
     stage.settings = replace(SETTINGS, agents=("/agents/arbor", "/agents/arbor"))
     stage.scripts = {"b01": (tagged("a1"),), "b02": (tagged("a2"),)}
@@ -1856,6 +1878,95 @@ async def test_two_agents_started_on_their_shares_both_have_their_keeps_merged_i
     assert merged == {a1: "merged", a2: "merged"}
     head = await stage.repo.head(INTEGRATION_BRANCH)
     assert recipe_tags(await stage.repo.read_recipe(head)) == {"a1", "a2"}
+
+
+async def _two_arbors(agents: tuple[str, ...], work_dir: Path) -> dict[int, Path]:
+    """Every agent an Arbor checkout, with none fetched: real subprocesses would let the virtual clock run on."""
+
+    return dict.fromkeys(range(len(agents)), work_dir / "sources" / "0")
+
+
+def _agent_map(stage: Stage) -> list[dict[str, Any]]:
+    """The decisions of the session's agent map, in order."""
+
+    return [row for row in _decisions(stage) if str(row["reason"]).startswith("agent map:")]
+
+
+async def test_without_a_map_two_arbors_split_the_map_of_the_session_s_dossier_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[tuple[str, OpShares | None]] = []
+    started: list[DossierStart] = []
+
+    async def split(
+        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None, *_source: str
+    ) -> tuple[str, ...]:
+        asked.append((map_file, root_shares))
+        return ("/shares/share-1.json", "/shares/share-2.json")
+
+    async def dossier(start: DossierStart) -> DossierOutcome:
+        started.append(start)
+        return DossierOutcome(Path("/pass/directions.json"), Path("/pass/docs/dossier/qwen3-8b"), MAPPED)
+
+    monkeypatch.setattr(lifecycle, "agent_plans", split)
+    monkeypatch.setattr(lifecycle, "arbor_agents", _two_arbors)
+    stage = _stage(tmp_path, child=child_with_patch(tmp_path))
+    stage.settings = replace(SETTINGS, agents=("/agents/arbor", "/agents/arbor"))
+    stage.dossier_pass = dossier
+    stage.judge = ScriptedCompletion([])
+
+    outcome = await stage.run()
+
+    assert outcome.stop_reason is SessionStopReason.TIME_EXHAUSTED
+    [start] = started
+    assert (start.source, start.start_commit) == ("/agents/arbor", await stage.root())
+    assert asked == [("/pass/directions.json", None)]
+    read, began, ended = _agent_map(stage)
+    assert [read["reason"], began["reason"], ended["reason"]] == [ROOT_SHARES_READ, DOSSIER_STARTED, DOSSIER_ENDED]
+    assert read["detail"]["job"] == "no root profile was started"
+    assert start.deadline == pytest.approx(began["at"] + DOSSIER_MINUTES * 60)
+    assert ended["detail"] == {
+        "reason": MAPPED,
+        "map": "/pass/directions.json",
+        "dossier": "/pass/docs/dossier/qwen3-8b",
+    }
+    assert stage.sessions.plans == {"b01": "/shares/share-1.json", "b02": "/shares/share-2.json"}
+
+
+@pytest.mark.parametrize("minutes", [DOSSIER_MINUTES, 0.0])
+async def test_a_dossier_pass_with_no_map_or_no_minutes_leaves_the_split_to_the_generic_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, minutes: float
+) -> None:
+    asked: list[str] = []
+    started: list[DossierStart] = []
+
+    async def split(
+        agents: tuple[str, ...], map_file: str, work_dir: Path, root_shares: OpShares | None = None, *_source: str
+    ) -> tuple[str, ...]:
+        asked.append(map_file)
+        return ("", "")
+
+    async def dossier(start: DossierStart) -> DossierOutcome:
+        started.append(start)
+        return DossierOutcome(None, None, "it refused its config: the pack has no dossier skill")
+
+    monkeypatch.setattr(lifecycle, "agent_plans", split)
+    monkeypatch.setattr(lifecycle, "arbor_agents", _two_arbors)
+    stage = _stage(tmp_path, child=child_with_patch(tmp_path))
+    stage.settings = replace(SETTINGS, agents=("/agents/arbor", "/agents/arbor"), agent_dossier_minutes=minutes)
+    stage.dossier_pass = dossier
+    stage.judge = ScriptedCompletion([])
+
+    outcome = await stage.run()
+
+    assert outcome.stop_reason is SessionStopReason.TIME_EXHAUSTED
+    assert asked == [""]
+    steps = [row["reason"] for row in _agent_map(stage)]
+    if minutes:
+        assert (steps, len(started)) == ([ROOT_SHARES_READ, DOSSIER_STARTED, DOSSIER_ENDED], 1)
+        assert _agent_map(stage)[-1]["detail"]["map"] == ""
+    else:
+        assert (steps, started) == ([ROOT_SHARES_READ, DOSSIER_SKIPPED], [])
 
 
 USER_DIRECTION = "Fuse the MoE gate into the router kernel."
