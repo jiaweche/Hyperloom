@@ -18,8 +18,10 @@ from hyperloom_multibranch.scheduling.roster import RosterCaps
 
 #: FINAL's sweep concs as multiples of an InferenceX workload's conc; the primary operating point is one of them.
 SWEEP_FACTORS = (0.5, 1.0, 2.0)
-#: How long the dossier pass that maps two or more Arbors' directions may run, unless the run says otherwise.
-DOSSIER_MINUTES = 30.0
+#: How long the dossier pass that maps two or more Arbors' directions may run, unless the run says otherwise. Arbor
+#: starts its first iteration only with an hour and its 3 min margin left (its estimate with none measured), and ends
+#: the pass as soon as the map is set: on Ruby, two of its iterations wrote a Qwen3-8B dossier and map in 15-25 min.
+DOSSIER_MINUTES = 90.0
 
 
 def sweep_concs(conc: int) -> tuple[int, ...]:

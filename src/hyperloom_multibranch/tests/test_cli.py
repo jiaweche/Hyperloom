@@ -329,8 +329,8 @@ def test_the_agent_directions_map_is_kept_by_its_absolute_path(tmp_path: Path, m
     assert _settings("--autonomous-agent", "/agents/arbor").agent_directions == ""
 
 
-def test_the_dossier_pass_has_thirty_minutes_unless_the_run_gives_it_others_and_none_below_zero() -> None:
-    assert _settings("--autonomous-agent", "/agents/arbor").agent_dossier_minutes == DOSSIER_MINUTES == 30.0
+def test_the_dossier_pass_has_ninety_minutes_unless_the_run_gives_it_others_and_none_below_zero() -> None:
+    assert _settings("--autonomous-agent", "/agents/arbor").agent_dossier_minutes == DOSSIER_MINUTES == 90.0
     assert _settings("--agent-dossier-minutes", "0").agent_dossier_minutes == 0.0
     with pytest.raises(ValueError, match="--agent-dossier-minutes -5 is negative"):
         _settings("--agent-dossier-minutes", "-5")

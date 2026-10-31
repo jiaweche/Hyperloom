@@ -32,7 +32,7 @@ Each ``--autonomous-agent SOURCE`` opens one branch where EXPLORE starts, after 
 carries credentials in its URL is a usage error. ``--agent-directions FILE`` names a directions map that is split, after
 PRELUDE, into disjoint shares, one per Arbor agent among them, each its ``component.plan``; a map with no directions, or
 one given with no agent, is a usage error. Without one, two or more Arbors split the map of a dossier pass, the first
-Arbor run once before their branches open for at most ``--agent-dossier-minutes`` (default 30), or, when it gives none
+Arbor run once before their branches open for at most ``--agent-dossier-minutes`` (default 90), or, when it gives none
 or the minutes are 0, a map Arbor generates from the root's profile (its op shares, else its kernel shares); a negative
 value is a usage error. ``--agent-pack NAME`` names the pack those Arbors run instead of Arbor's
 serving template; a name that is not one directory, or one given with no agent, is a usage error, and a pack the Arbor
@@ -418,7 +418,8 @@ def _add_agent_options(run: argparse.ArgumentParser) -> None:
         metavar="MINUTES",
         help=(
             "Without --agent-directions, how long the dossier pass that maps two or more Arbor agents' directions may"
-            f" run before their branches open, out of EXPLORE's time; 0 runs none (default {DOSSIER_MINUTES:g})."
+            " run before their branches open, out of EXPLORE's time; it ends once its map is set. Arbor starts no"
+            f" iteration with under 63 minutes left, so less runs none; 0 skips it (default {DOSSIER_MINUTES:g})."
         ),
     )
     run.add_argument(
